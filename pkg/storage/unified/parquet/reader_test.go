@@ -79,7 +79,6 @@ func TestParquetWriteThenRead(t *testing.T) {
 			keys = append(keys, resource.SearchID(req.Key))
 		}
 
-		// Verify that we read all values
 		require.Equal(t, []string{
 			"ns/ggg/rrr/aaa",
 			"ns/ggg/rrr/bbb",

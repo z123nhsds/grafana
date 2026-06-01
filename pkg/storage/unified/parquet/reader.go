@@ -107,9 +107,7 @@ func (r *parquetReader) close() {
 }
 
 func newResourceReader(inputPath string, batchSize int64) (*parquetReader, error) {
-	// memoryMap must be false: arrow-go does not implement mmap on Windows
-	// (returns "mmap not implemented on windows")
-	rdr, err := file.OpenParquetFile(inputPath, false)
+	rdr, err := openParquetFile(inputPath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -246,10 +244,10 @@ func (c *stringColumn) batch(batchSize int64, defLevels []int16, repLevels []int
 }
 
 type int32Column struct {
-	index  int // within the schemna
+	index  int
 	reader *file.Int32ColumnChunkReader
 	buffer []int32
-	count  int // the active count
+	count  int
 }
 
 func (c *int32Column) open(rgr *file.RowGroupReader) error {
