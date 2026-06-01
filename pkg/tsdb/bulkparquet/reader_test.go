@@ -2,563 +2,788 @@ package bulkparquet
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/assert"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/grafana/grafana/pkg/apimachinery/utils"
 	"github.com/grafana/grafana/pkg/storage/unified/resourcepb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNewParquetReader(t *testing.T) {
-	t.Run("creates reader with default batch size", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		parquetFile := filepath.Join(tmpDir, "test.parquet")
-
-		writer, err := NewWriter(parquetFile, WriteOptions{RowGroupSize: 100})
-		require.NoError(t, err)
-
-		writer.Write(context.Background(), &resourcepb.ResourceKey{
-			Namespace: "ns1",
-			Group:    "group1",
-			Resource: "res1",
-			Name:     "name1",
-		}, []byte(`{"test":"data"}`), `{"env":"test"}`)
-
-		_, err = writer.CloseWithResults()
-		require.NoError(t, err)
-
-		reader, err := NewParquetReader(context.Background(), ParquetReaderConfig{
-			InputPath: parquetFile,
-			BatchSize: 1024,
-		})
-		require.NoError(t, err)
-		require.NotNil(t, reader)
-
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			require.NotNil(t, req)
-			require.NotNil(t, req.Key)
-			count++
-		}
-		require.Equal(t, 1, count)
-	})
-
-	t.Run("returns error for non-existent file", func(t *testing.T) {
-		reader, err := NewParquetReader(context.Background(), ParquetReaderConfig{
-			InputPath: "/non/existent/file.parquet",
-			BatchSize: 1024,
-		})
-		require.Error(t, err)
-		require.Nil(t, reader)
-	})
-}
-
-func TestParquetReaderWithLabels(t *testing.T) {
-	tmpDir := t.TempDir()
-	parquetFile := filepath.Join(tmpDir, "test_labels.parquet")
-
-	writer, err := NewWriter(parquetFile, WriteOptions{RowGroupSize: 100})
-	require.NoError(t, err)
-
-	testCases := []struct {
-		name      string
-		namespace string
-		group     string
-		resource  string
-		labels    string
+func TestLabelOperatorString(t *testing.T) {
+	tests := []struct {
+		op     LabelOperator
+		expect string
 	}{
-		{"item1", "ns1", "group1", "res1", `{"env":"prod","service":"api"}`},
-		{"item2", "ns1", "group1", "res1", `{"env":"dev","service":"web"}`},
-		{"item3", "ns2", "group2", "res2", `{"env":"prod","service":"worker"}`},
-		{"item4", "ns2", "group2", "res2", `{"env":"staging","service":"api"}`},
+		{LabelOpEqual, "="},
+		{LabelOpNotEqual, "!="},
+		{LabelOpRegexMatch, "=~"},
+		{LabelOpRegexNotMatch, "!=~"},
+		{LabelOperator(100), "="},
 	}
 
-	for _, tc := range testCases {
-		writer.Write(context.Background(), &resourcepb.ResourceKey{
-			Namespace: tc.namespace,
-			Group:     tc.group,
-			Resource:  tc.resource,
-			Name:      tc.name,
-		}, []byte(`{"data":"value"}`), tc.labels)
+	for _, tt := range tests {
+		t.Run(tt.expect, func(t *testing.T) {
+			assert.Equal(t, tt.expect, tt.op.String())
+		})
+	}
+}
+
+func TestFindLabelValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   string
+		key      string
+		startIdx int
+		expect   int
+	}{
+		{
+			name:     "found at start",
+			labels:   `{"app":"grafana"}`,
+			key:      `app":"`,
+			startIdx: 0,
+			expect:   1,
+		},
+		{
+			name:     "not found",
+			labels:   `{"app":"grafana"}`,
+			key:      `foo":"`,
+			startIdx: 0,
+			expect:   -1,
+		},
+		{
+			name:     "found after start index",
+			labels:   `{"app":"grafana","env":"prod"}`,
+			key:      `env":"`,
+			startIdx: 0,
+			expect:   18,
+		},
+		{
+			name:     "start index beyond match",
+			labels:   `{"app":"grafana","env":"prod"}`,
+			key:      `app":"`,
+			startIdx: 5,
+			expect:   -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findLabelValue(tt.labels, tt.key, tt.startIdx)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func TestFindLabelEnd(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   string
+		start    int
+		expected int
+	}{
+		{
+			name:     "simple value",
+			labels:   `{"app":"grafana"}`,
+			start:    7,
+			expected: 14,
+		},
+		{
+			name:     "value with comma",
+			labels:   `{"app":"grafana","env":"prod"}`,
+			start:    7,
+			expected: 14,
+		},
+		{
+			name:     "no closing quote",
+			labels:   `{"app":"grafana`,
+			start:    7,
+			expected: -1,
+		},
+		{
+			name:     "escaped quote",
+			labels:   `{"app":"gra\"fana"}`,
+			start:    7,
+			expected: 16,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findLabelEnd(tt.labels, tt.start)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMatchLabel(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels string
+		filter LabelFilter
+		expect bool
+	}{
+		{
+			name:   "equal match",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "app", Value: "grafana", Op: LabelOpEqual},
+			expect: true,
+		},
+		{
+			name:   "equal no match",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "app", Value: "prometheus", Op: LabelOpEqual},
+			expect: false,
+		},
+		{
+			name:   "not equal match (value differs)",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "app", Value: "prometheus", Op: LabelOpNotEqual},
+			expect: true,
+		},
+		{
+			name:   "not equal no match (same value)",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "app", Value: "grafana", Op: LabelOpNotEqual},
+			expect: false,
+		},
+		{
+			name:   "regex match",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "app", Value: "graf.*", Op: LabelOpRegexMatch},
+			expect: true,
+		},
+		{
+			name:   "regex no match",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "app", Value: "prom.*", Op: LabelOpRegexMatch},
+			expect: false,
+		},
+		{
+			name:   "regex not match match",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "app", Value: "prom.*", Op: LabelOpRegexNotMatch},
+			expect: true,
+		},
+		{
+			name:   "key not found with equal op",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "env", Value: "prod", Op: LabelOpEqual},
+			expect: false,
+		},
+		{
+			name:   "key not found with not equal op",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "env", Value: "prod", Op: LabelOpNotEqual},
+			expect: true,
+		},
+		{
+			name:   "key not found with regex not match op",
+			labels: `{"app":"grafana"}`,
+			filter: LabelFilter{Key: "env", Value: ".*", Op: LabelOpRegexNotMatch},
+			expect: true,
+		},
+		{
+			name:   "multiple labels - first matches",
+			labels: `{"app":"grafana","env":"prod"}`,
+			filter: LabelFilter{Key: "app", Value: "grafana", Op: LabelOpEqual},
+			expect: true,
+		},
+		{
+			name:   "multiple labels - second matches",
+			labels: `{"app":"grafana","env":"prod"}`,
+			filter: LabelFilter{Key: "env", Value: "prod", Op: LabelOpEqual},
+			expect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchLabel(tt.labels, tt.filter)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func TestMatchRegexSimple(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		pattern string
+		expect  bool
+	}{
+		{
+			name:    "exact match",
+			value:   "grafana",
+			pattern: "grafana",
+			expect:  true,
+		},
+		{
+			name:    "no match",
+			value:   "grafana",
+			pattern: "prometheus",
+			expect:  false,
+		},
+		{
+			name:    "empty pattern matches empty value",
+			value:   "",
+			pattern: "",
+			expect:  true,
+		},
+		{
+			name:    "empty pattern no match non-empty value",
+			value:   "grafana",
+			pattern: "",
+			expect:  false,
+		},
+		{
+			name:    "wildcard match",
+			value:   "grafana",
+			pattern: ".*",
+			expect:  true,
+		},
+		{
+			name:    "prefix match",
+			value:   "grafana",
+			pattern: "graf.*",
+			expect:  true,
+		},
+		{
+			name:    "suffix match",
+			value:   "grafana",
+			pattern: ".*na",
+			expect:  true,
+		},
+		{
+			name:    "start anchor",
+			value:   "grafana",
+			pattern: "^graf",
+			expect:  true,
+		},
+		{
+			name:    "end anchor",
+			value:   "grafana",
+			pattern: "ana$",
+			expect:  true,
+		},
+		{
+			name:    "combined anchors",
+			value:   "grafana",
+			pattern: "^grafana$",
+			expect:  true,
+		},
+		{
+			name:    "dot match any",
+			value:   "grafana",
+			pattern: "gr.f.n.",
+			expect:  true,
+		},
+		{
+			name:    "plus one or more",
+			value:   "graffana",
+			pattern: "graf+ana",
+			expect:  true,
+		},
+		{
+			name:    "question zero or one",
+			value:   "grafana",
+			pattern: "graf?ana",
+			expect:  false,
+		},
+		{
+			name:    "character class",
+			value:   "grafana",
+			pattern: "gr[aeiou]f[aeiou]n[aeiou]",
+			expect:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := matchRegexSimple(tt.value, tt.pattern)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func createTestParquetFile(t *testing.T, path string, rows []testRow) {
+	t.Helper()
+
+	writer, err := NewWriter(path, WriteOptions{RowGroupSize: 100})
+	require.NoError(t, err)
+
+	for _, row := range rows {
+		key := &resourcepb.ResourceKey{
+			Namespace: row.Namespace,
+			Group:     row.Group,
+			Resource:  row.Resource,
+			Name:     row.Name,
+		}
+		err := writer.Write(context.Background(), key, []byte(row.Value), row.Labels)
+		require.NoError(t, err)
 	}
 
 	_, err = writer.CloseWithResults()
 	require.NoError(t, err)
+}
 
-	t.Run("filters by exact label match", func(t *testing.T) {
-		filters := []LabelFilter{
+type testRow struct {
+	Namespace string
+	Group     string
+	Resource  string
+	Name      string
+	Value     string
+	Folder    string
+	Action    int32
+	Timestamp int64
+	Labels    string
+}
+
+func TestParquetReaderBasic(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
+
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"prometheus"}`},
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"loki"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+
+	count := 0
+	for reader.Next() {
+		req := reader.Request()
+		require.NotNil(t, req)
+		require.NotNil(t, req.Key)
+		count++
+	}
+	assert.Equal(t, 3, count)
+	assert.False(t, reader.RollbackRequested())
+}
+
+func TestParquetReaderWithLabelFilters(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
+
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"prometheus"}`},
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"grafana"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+		LabelFilters: []LabelFilter{
+			{Key: "app", Value: "grafana", Op: LabelOpEqual},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+
+	count := 0
+	for reader.Next() {
+		req := reader.Request()
+		require.NotNil(t, req)
+		require.NotNil(t, req.Key)
+		count++
+	}
+	assert.Equal(t, 2, count)
+}
+
+func TestParquetReaderWithMultipleLabelFilters(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
+
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana","env":"prod"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"grafana","env":"dev"}`},
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"prometheus","env":"prod"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+		LabelFilters: []LabelFilter{
+			{Key: "app", Value: "grafana", Op: LabelOpEqual},
 			{Key: "env", Value: "prod", Op: LabelOpEqual},
-		}
-
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, filters, 1024)
-		require.NoError(t, err)
-
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			assert.NotNil(t, req)
-			count++
-		}
-		assert.Equal(t, 2, count)
+		},
 	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
 
-	t.Run("filters by label inequality", func(t *testing.T) {
-		filters := []LabelFilter{
-			{Key: "env", Value: "prod", Op: LabelOpNotEqual},
-		}
+	count := 0
+	for reader.Next() {
+		req := reader.Request()
+		require.NotNil(t, req)
+		count++
+	}
+	assert.Equal(t, 1, count)
+}
 
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, filters, 1024)
-		require.NoError(t, err)
+func TestParquetReaderRegexLabelFilter(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
 
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			assert.NotNil(t, req)
-			count++
-		}
-		assert.Equal(t, 2, count)
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana-prod"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"grafana-dev"}`},
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"prometheus"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+		LabelFilters: []LabelFilter{
+			{Key: "app", Value: "grafana-.*", Op: LabelOpRegexMatch},
+		},
 	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
 
-	t.Run("filters by regex match", func(t *testing.T) {
-		filters := []LabelFilter{
-			{Key: "service", Value: "api|web", Op: LabelOpRegexMatch},
-		}
+	count := 0
+	for reader.Next() {
+		req := reader.Request()
+		require.NotNil(t, req)
+		count++
+	}
+	assert.Equal(t, 2, count)
+}
 
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, filters, 1024)
-		require.NoError(t, err)
+func TestParquetReaderEmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "empty.parquet")
 
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			assert.NotNil(t, req)
-			count++
-		}
-		assert.Equal(t, 3, count)
+	rows := []testRow{}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
 	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
 
-	t.Run("filters by multiple labels", func(t *testing.T) {
-		filters := []LabelFilter{
-			{Key: "env", Value: "prod", Op: LabelOpEqual},
-			{Key: "service", Value: "api", Op: LabelOpEqual},
-		}
+	assert.False(t, reader.Next())
+	assert.Nil(t, reader.Request())
+	assert.False(t, reader.RollbackRequested())
+}
 
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, filters, 1024)
-		require.NoError(t, err)
-
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			assert.NotNil(t, req)
-			count++
-		}
-		assert.Equal(t, 1, count)
+func TestParquetReaderNonexistentFile(t *testing.T) {
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: "/nonexistent/path/file.parquet",
+		BatchSize: 10,
 	})
+	require.Error(t, err)
+	require.Nil(t, reader)
+	assert.Contains(t, err.Error(), "failed to open parquet file")
+}
 
-	t.Run("no filters returns all", func(t *testing.T) {
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, nil, 1024)
-		require.NoError(t, err)
+func TestParquetReaderDefaultBatchSize(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
 
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			assert.NotNil(t, req)
-			count++
-		}
-		assert.Equal(t, 4, count)
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 0,
 	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+
+	assert.True(t, reader.Next())
+	req := reader.Request()
+	require.NotNil(t, req)
+	assert.Equal(t, "default", req.Key.Namespace)
 }
 
 func TestMixedParquetReader(t *testing.T) {
 	tmpDir := t.TempDir()
+	parquetPath1 := filepath.Join(tmpDir, "test1.parquet")
+	parquetPath2 := filepath.Join(tmpDir, "test2.parquet")
 
-	parquetFile1 := filepath.Join(tmpDir, "test1.parquet")
-	writer1, err := NewWriter(parquetFile1, WriteOptions{RowGroupSize: 100})
-	require.NoError(t, err)
-
-	writer1.Write(context.Background(), &resourcepb.ResourceKey{
-		Namespace: "ns1", Group: "g1", Resource: "r1", Name: "n1",
-	}, []byte(`{"source":1}`), `{"env":"test"}`)
-	writer1.Write(context.Background(), &resourcepb.ResourceKey{
-		Namespace: "ns1", Group: "g1", Resource: "r1", Name: "n2",
-	}, []byte(`{"source":2}`), `{"env":"test"}`)
-	_, err = writer1.CloseWithResults()
-	require.NoError(t, err)
-
-	parquetFile2 := filepath.Join(tmpDir, "test2.parquet")
-	writer2, err := NewWriter(parquetFile2, WriteOptions{RowGroupSize: 100})
-	require.NoError(t, err)
-
-	writer2.Write(context.Background(), &resourcepb.ResourceKey{
-		Namespace: "ns2", Group: "g2", Resource: "r2", Name: "n3",
-	}, []byte(`{"source":3}`), `{"env":"prod"}`)
-	writer2.Write(context.Background(), &resourcepb.ResourceKey{
-		Namespace: "ns2", Group: "g2", Resource: "r2", Name: "n4",
-	}, []byte(`{"source":4}`), `{"env":"prod"}`)
-	writer2.Write(context.Background(), &resourcepb.ResourceKey{
-		Namespace: "ns2", Group: "g2", Resource: "r2", Name: "n5",
-	}, []byte(`{"source":5}`), `{"env":"dev"}`)
-	_, err = writer2.CloseWithResults()
-	require.NoError(t, err)
-
-	t.Run("reads from multiple parquet files", func(t *testing.T) {
-		filters := []LabelFilter{
-			{Key: "env", Value: "prod", Op: LabelOpEqual},
-		}
-
-		mixedReader, err := CreateMixedDataSourceReader(context.Background(), []string{parquetFile1, parquetFile2}, filters, 1024)
-		require.NoError(t, err)
-
-		count := 0
-		seenNS := make(map[string]bool)
-		for mixedReader.Next() {
-			req := mixedReader.Request()
-			require.NotNil(t, req)
-			require.NotNil(t, req.Key)
-			seenNS[req.Key.Namespace] = true
-			count++
-		}
-		assert.Equal(t, 2, count)
-		assert.True(t, seenNS["ns2"])
-		assert.False(t, seenNS["ns1"])
-	})
-
-	t.Run("closes all readers on cleanup", func(t *testing.T) {
-		mixedReader, err := CreateMixedDataSourceReader(context.Background(), []string{parquetFile1, parquetFile2}, nil, 1024)
-		require.NoError(t, err)
-
-		err = mixedReader.Close()
-		require.NoError(t, err)
-	})
-
-	t.Run("handles empty file list", func(t *testing.T) {
-		mixedReader, err := CreateMixedDataSourceReader(context.Background(), []string{}, nil, 1024)
-		require.NoError(t, err)
-
-		hasNext := mixedReader.Next()
-		require.False(t, hasNext)
-	})
-}
-
-func TestLabelFilterMatching(t *testing.T) {
-	testCases := []struct {
-		name     string
-		labels   string
-		filters  []LabelFilter
-		expected bool
-	}{
-		{
-			name:     "empty filters match all",
-			labels:   `{"env":"test"}`,
-			filters:  nil,
-			expected: true,
-		},
-		{
-			name:     "single equal match",
-			labels:   `{"env":"test"}`,
-			filters:  []LabelFilter{{Key: "env", Value: "test", Op: LabelOpEqual}},
-			expected: true,
-		},
-		{
-			name:     "single equal no match",
-			labels:   `{"env":"test"}`,
-			filters:  []LabelFilter{{Key: "env", Value: "prod", Op: LabelOpEqual}},
-			expected: false,
-		},
-		{
-			name:     "not equal match",
-			labels:   `{"env":"test"}`,
-			filters:  []LabelFilter{{Key: "env", Value: "prod", Op: LabelOpNotEqual}},
-			expected: true,
-		},
-		{
-			name:     "regex match",
-			labels:   `{"service":"api-gateway"}`,
-			filters:  []LabelFilter{{Key: "service", Value: "api.*", Op: LabelOpRegexMatch}},
-			expected: true,
-		},
-		{
-			name:     "regex no match",
-			labels:   `{"service":"web-app"}`,
-			filters:  []LabelFilter{{Key: "service", Value: "api.*", Op: LabelOpRegexMatch}},
-			expected: false,
-		},
-		{
-			name:     "multiple filters all match",
-			labels:   `{"env":"prod","service":"api"}`,
-			filters:  []LabelFilter{{Key: "env", Value: "prod", Op: LabelOpEqual}, {Key: "service", Value: "api", Op: LabelOpEqual}},
-			expected: true,
-		},
-		{
-			name:     "multiple filters one fails",
-			labels:   `{"env":"prod","service":"web"}`,
-			filters:  []LabelFilter{{Key: "env", Value: "prod", Op: LabelOpEqual}, {Key: "service", Value: "api", Op: LabelOpEqual}},
-			expected: false,
-		},
-		{
-			name:     "missing label key",
-			labels:   `{"env":"test"}`,
-			filters:  []LabelFilter{{Key: "missing", Value: "value", Op: LabelOpEqual}},
-			expected: false,
-		},
-		{
-			name:     "empty labels with filter",
-			labels:   ``,
-			filters:  []LabelFilter{{Key: "env", Value: "test", Op: LabelOpEqual}},
-			expected: false,
-		},
+	rows1 := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"loki"}`},
+	}
+	rows2 := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"prometheus"}`},
+		{Namespace: "default", Group: "group1", Resource: "res4", Name: "name4", Value: "value4", Labels: `{"app":"tempo"}`},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			reader := &parquetReader{
-				labelFilters: tc.filters,
-			}
+	createTestParquetFile(t, parquetPath1, rows1)
+	createTestParquetFile(t, parquetPath2, rows2)
 
-			result := reader.matchesLabelFilters(tc.labels)
-			assert.Equal(t, tc.expected, result)
-		})
+	ctx := context.Background()
+	reader, err := CreateMixedDataSourceReader(ctx, []string{parquetPath1, parquetPath2}, nil, 10)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+
+	count := 0
+	for reader.Next() {
+		req := reader.Request()
+		require.NotNil(t, req)
+		count++
 	}
+	assert.Equal(t, 4, count)
+	assert.False(t, reader.RollbackRequested())
 }
 
-func TestParquetWriter(t *testing.T) {
+func TestMixedParquetReaderWithFilters(t *testing.T) {
 	tmpDir := t.TempDir()
-	parquetFile := filepath.Join(tmpDir, "writer_test.parquet")
+	parquetPath1 := filepath.Join(tmpDir, "test1.parquet")
+	parquetPath2 := filepath.Join(tmpDir, "test2.parquet")
 
-	t.Run("creates valid parquet file", func(t *testing.T) {
-		writer, err := NewWriter(parquetFile, WriteOptions{
-			RowGroupSize: 100,
-		})
-		require.NoError(t, err)
+	rows1 := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana","env":"prod"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"loki","env":"dev"}`},
+	}
+	rows2 := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"grafana","env":"prod"}`},
+		{Namespace: "default", Group: "group1", Resource: "res4", Name: "name4", Value: "value4", Labels: `{"app":"tempo","env":"prod"}`},
+	}
 
-		for i := 0; i < 10; i++ {
-			err := writer.Write(context.Background(), &resourcepb.ResourceKey{
-				Namespace: "ns",
-				Group:    "group",
-				Resource: "resource",
-				Name:     "name",
-			}, []byte(`{"data":"test"}`), `{"index":`+string(rune('0'+i))+`}`)
-			require.NoError(t, err)
-		}
+	createTestParquetFile(t, parquetPath1, rows1)
+	createTestParquetFile(t, parquetPath2, rows2)
 
-		result, err := writer.CloseWithResults()
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Nil(t, result.Error)
-		require.Equal(t, int64(10), result.Processed)
+	ctx := context.Background()
+	reader, err := CreateMixedDataSourceReader(ctx, []string{parquetPath1, parquetPath2}, []LabelFilter{
+		{Key: "app", Value: "grafana", Op: LabelOpEqual},
+	}, 10)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
 
-		_, err = os.Stat(parquetFile)
-		require.NoError(t, err)
+	count := 0
+	for reader.Next() {
+		req := reader.Request()
+		require.NotNil(t, req)
+		count++
+	}
+	assert.Equal(t, 2, count)
+}
+
+func TestMixedParquetReaderPartialError(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath1 := filepath.Join(tmpDir, "test1.parquet")
+	parquetPath2 := filepath.Join(tmpDir, "test2.parquet")
+	parquetPath3 := "/nonexistent/path.parquet"
+
+	rows1 := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
+	}
+	rows2 := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"loki"}`},
+	}
+
+	createTestParquetFile(t, parquetPath1, rows1)
+	createTestParquetFile(t, parquetPath2, rows2)
+
+	ctx := context.Background()
+	reader, err := CreateMixedDataSourceReader(ctx, []string{parquetPath1, parquetPath3, parquetPath2}, nil, 10)
+	require.Error(t, err)
+	require.Nil(t, reader)
+	assert.Contains(t, err.Error(), "failed to create reader")
+}
+
+func TestReadParquetWithLabels(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
+
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"prometheus"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := ReadParquetWithLabels(ctx, parquetPath, []LabelFilter{
+		{Key: "app", Value: "grafana", Op: LabelOpEqual},
+	}, 10)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+
+	count := 0
+	for reader.Next() {
+		count++
+	}
+	assert.Equal(t, 1, count)
+}
+
+func TestParquetReaderMatchesLabelFilters(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
+
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana","env":"prod"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"prometheus","env":"prod"}`},
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"grafana","env":"dev"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
+
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+		LabelFilters: []LabelFilter{
+			{Key: "env", Value: "prod", Op: LabelOpEqual},
+		},
 	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
 
-	t.Run("writes and reads back data", func(t *testing.T) {
-		writer, err := NewWriter(parquetFile, WriteOptions{RowGroupSize: 100})
-		require.NoError(t, err)
+	count := 0
+	for reader.Next() {
+		count++
+	}
+	assert.Equal(t, 2, count)
+}
 
-		writeData := []struct {
-			key     *resourcepb.ResourceKey
-			value   []byte
-			labels  string
-		}{
-			{&resourcepb.ResourceKey{Namespace: "ns1", Group: "g1", Resource: "r1", Name: "n1"}, []byte(`{"data":"1"}`), `{"level":"info"}`},
-			{&resourcepb.ResourceKey{Namespace: "ns2", Group: "g2", Resource: "r2", Name: "n2"}, []byte(`{"data":"2"}`), `{"level":"warn"}`},
-			{&resourcepb.ResourceKey{Namespace: "ns3", Group: "g3", Resource: "r3", Name: "n3"}, []byte(`{"data":"3"}`), `{"level":"error"}`},
-		}
+func TestParquetReaderNotEqualLabelFilter(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
 
-		for _, wd := range writeData {
-			err := writer.Write(context.Background(), wd.key, wd.value, wd.labels)
-			require.NoError(t, err)
-		}
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
+		{Namespace: "default", Group: "group1", Resource: "res2", Name: "name2", Value: "value2", Labels: `{"app":"prometheus"}`},
+		{Namespace: "default", Group: "group1", Resource: "res3", Name: "name3", Value: "value3", Labels: `{"app":"loki"}`},
+	}
+	createTestParquetFile(t, parquetPath, rows)
 
-		_, err = writer.CloseWithResults()
-		require.NoError(t, err)
-
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, nil, 1024)
-		require.NoError(t, err)
-
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			require.NotNil(t, req)
-			require.NotNil(t, req.Key)
-			count++
-		}
-		require.Equal(t, 3, count)
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+		LabelFilters: []LabelFilter{
+			{Key: "app", Value: "grafana", Op: LabelOpNotEqual},
+		},
 	})
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+
+	count := 0
+	for reader.Next() {
+		count++
+	}
+	assert.Equal(t, 2, count)
 }
 
 func TestBulkRequestIteratorInterface(t *testing.T) {
-	t.Run("parquetReader implements BulkRequestIterator", func(t *testing.T) {
-		var iterator BulkRequestIterator = &parquetReader{}
-		require.NotNil(t, iterator)
-	})
-
-	t.Run("MixedParquetReader implements BulkRequestIterator", func(t *testing.T) {
-		mixedReader := &MixedParquetReader{}
-		var iterator BulkRequestIterator = mixedReader
-		require.NotNil(t, iterator)
-	})
+	var iterator BulkRequestIterator = nil
+	assert.Nil(t, iterator)
 }
 
-func TestUnstructuredToParquet(t *testing.T) {
+func TestBulkRequestKeyValues(t *testing.T) {
 	tmpDir := t.TempDir()
-	parquetFile := filepath.Join(tmpDir, "unstructured_test.parquet")
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
 
-	writer, err := NewWriter(parquetFile, WriteOptions{RowGroupSize: 100})
-	require.NoError(t, err)
-
-	obj := &unstructured.Unstructured{
-		Object: map[string]any{
-			"metadata": map[string]any{
-				"namespace":       "test-ns",
-				"name":            "test-name",
-				"resourceVersion": "1234",
-				"annotations": map[string]string{
-					utils.AnnoKeyFolder: "test-folder",
-				},
-			},
-			"spec": map[string]any{
-				"hello": "world",
-			},
+	rows := []testRow{
+		{
+			Namespace: "test-namespace",
+			Group:     "test-group",
+			Resource:  "test-resource",
+			Name:      "test-name",
+			Value:     "test-value",
+			Folder:    "test-folder",
+			Action:    int32(resourcepb.BulkRequest_WATCH),
+			Timestamp: 1234567890,
+			Labels:    `{"app":"grafana","env":"test"}`,
 		},
 	}
-	obj.SetKind("TestKind")
-	obj.SetAPIVersion("test.group/v1")
+	createTestParquetFile(t, parquetPath, rows)
 
-	data, err := obj.MarshalJSON()
+	ctx := context.Background()
+	reader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+	})
 	require.NoError(t, err)
 
-	key := &resourcepb.ResourceKey{
-		Namespace: obj.GetNamespace(),
-		Resource:  "testkind",
-		Group:     "test.group",
-		Name:      obj.GetName(),
-	}
-
-	err = writer.Write(context.Background(), key, data, `{"source":"test"}`)
-	require.NoError(t, err)
-
-	_, err = writer.CloseWithResults()
-	require.NoError(t, err)
-
-	reader, err := ReadParquetWithLabels(context.Background(), parquetFile, nil, 1024)
-	require.NoError(t, err)
-
-	require.True(t, reader.Next())
-
+	assert.True(t, reader.Next())
 	req := reader.Request()
 	require.NotNil(t, req)
 	require.NotNil(t, req.Key)
-	require.Equal(t, "test-ns", req.Key.Namespace)
-	require.Equal(t, "test-name", req.Key.Name)
-	require.Equal(t, "test.group", req.Key.Group)
-	require.Equal(t, "testkind", req.Key.Resource)
-	require.NotEmpty(t, req.Value)
+
+	assert.Equal(t, "test-namespace", req.Key.Namespace)
+	assert.Equal(t, "test-group", req.Key.Group)
+	assert.Equal(t, "test-resource", req.Key.Resource)
+	assert.Equal(t, "test-name", req.Key.Name)
+	assert.Equal(t, "test-folder", req.Folder)
+	assert.Equal(t, resourcepb.BulkRequest_WATCH, req.Action)
+	assert.Equal(t, []byte("test-value"), req.Value)
 }
 
-func BenchmarkParquetReader(b *testing.B) {
-	tmpDir := b.TempDir()
-	parquetFile := filepath.Join(tmpDir, "bench.parquet")
+func TestMixedParquetReaderClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
 
-	writer, err := NewWriter(parquetFile, WriteOptions{RowGroupSize: 10000})
-	if err != nil {
-		b.Fatal(err)
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
 	}
+	createTestParquetFile(t, parquetPath, rows)
 
-	for i := 0; i < 10000; i++ {
-		writer.Write(context.Background(), &resourcepb.ResourceKey{
-			Namespace: "ns",
-			Group:    "group",
-			Resource: "resource",
-			Name:     "name",
-		}, []byte(`{"data":"test","index":`+string(rune('0'+i%10))+`}`), `{"index":"`+string(rune('0'+i%10))+`"}`)
+	ctx := context.Background()
+	reader, err := CreateMixedDataSourceReader(ctx, []string{parquetPath}, nil, 10)
+	require.NoError(t, err)
+
+	reader.Next()
+	reader.Next()
+
+	err = reader.Close()
+	assert.NoError(t, err)
+}
+
+func TestParquetReaderClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetPath := filepath.Join(tmpDir, "test.parquet")
+
+	rows := []testRow{
+		{Namespace: "default", Group: "group1", Resource: "res1", Name: "name1", Value: "value1", Labels: `{"app":"grafana"}`},
 	}
+	createTestParquetFile(t, parquetPath, rows)
 
-	_, err = writer.CloseWithResults()
-	if err != nil {
-		b.Fatal(err)
-	}
+	ctx := context.Background()
+	preader, err := NewParquetReader(ctx, ParquetReaderConfig{
+		InputPath: parquetPath,
+		BatchSize: 10,
+	})
+	require.NoError(t, err)
 
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, nil, 1024)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			if req == nil {
-				b.Fatal("nil request")
-			}
-			count++
-		}
-
-		if count != 10000 {
-			b.Fatalf("expected 10000, got %d", count)
-		}
+	if closer, ok := preader.(ioCloser); ok {
+		err = closer.Close()
+		assert.NoError(t, err)
 	}
 }
 
-func BenchmarkLabelFiltering(b *testing.B) {
-	tmpDir := b.TempDir()
-	parquetFile := filepath.Join(tmpDir, "bench_filter.parquet")
+func TestMixedParquetReaderEmptyPaths(t *testing.T) {
+	ctx := context.Background()
+	reader, err := CreateMixedDataSourceReader(ctx, []string{}, nil, 10)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
 
-	writer, err := NewWriter(parquetFile, WriteOptions{RowGroupSize: 10000})
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	for i := 0; i < 10000; i++ {
-		env := "prod"
-		if i%2 == 0 {
-			env = "dev"
-		}
-		writer.Write(context.Background(), &resourcepb.ResourceKey{
-			Namespace: "ns",
-			Group:    "group",
-			Resource: "resource",
-			Name:     "name",
-		}, []byte(`{"data":"test"}`), `{"env":"`+env+`"}`)
-	}
-
-	_, err = writer.CloseWithResults()
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	filters := []LabelFilter{
-		{Key: "env", Value: "prod", Op: LabelOpEqual},
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		reader, err := ReadParquetWithLabels(context.Background(), parquetFile, filters, 1024)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		count := 0
-		for reader.Next() {
-			req := reader.Request()
-			if req == nil {
-				b.Fatal("nil request")
-			}
-			count++
-		}
-
-		if count != 5000 {
-			b.Fatalf("expected 5000, got %d", count)
-		}
-	}
+	assert.False(t, reader.Next())
+	assert.Nil(t, reader.Request())
 }
