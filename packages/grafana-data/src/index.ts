@@ -841,6 +841,18 @@ export {
   type LogSortOrderChangePayload,
 } from './types/logs';
 export {
+  type ParquetLabelFilter,
+  ParquetLabelFilterOp,
+  type ParquetLogLine,
+  type ParquetLogQueryRequest,
+  type MixedStreamingBatchState,
+  type MixedStreamingState,
+  type MixedStreamingEvent,
+  mixedAggregateRequestId,
+  createInitialStreamingState,
+  reduceStreamingState,
+} from './types/parquetLogReader';
+export {
   type AnnotationQuery,
   type AnnotationEvent,
   type AnnotationEventUIModel,

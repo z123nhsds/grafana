@@ -2,9 +2,11 @@ package parquet
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
+	"github.com/apache/arrow-go/v18/parquet/file"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -107,6 +109,22 @@ func TestParquetWriteThenRead(t *testing.T) {
 		require.NoError(t, reader.err)
 		require.Empty(t, keys)
 	})
+}
+
+func TestNewResourceReaderDisablesMemoryMap(t *testing.T) {
+	originalOpenParquetFile := openParquetFile
+	t.Cleanup(func() {
+		openParquetFile = originalOpenParquetFile
+	})
+
+	openParquetFile = func(_ string, memoryMap bool) (*file.Reader, error) {
+		require.False(t, memoryMap)
+		return nil, errors.New("boom")
+	}
+
+	reader, err := newResourceReader("ignored.parquet", 20)
+	require.Nil(t, reader)
+	require.EqualError(t, err, "boom")
 }
 
 func toKeyAndBytes(ctx context.Context, group string, res string, obj *unstructured.Unstructured) (context.Context, *resourcepb.ResourceKey, []byte) {

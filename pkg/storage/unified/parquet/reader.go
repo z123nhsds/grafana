@@ -12,6 +12,8 @@ import (
 
 var (
 	_ resource.BulkRequestIterator = (*parquetReader)(nil)
+
+	openParquetFile = file.OpenParquetFile
 )
 
 func NewParquetReader(inputPath string, batchSize int64) (resource.BulkRequestIterator, error) {
@@ -107,9 +109,7 @@ func (r *parquetReader) close() {
 }
 
 func newResourceReader(inputPath string, batchSize int64) (*parquetReader, error) {
-	// memoryMap must be false: arrow-go does not implement mmap on Windows
-	// (returns "mmap not implemented on windows")
-	rdr, err := file.OpenParquetFile(inputPath, false)
+	rdr, err := openParquetFile(inputPath, false)
 	if err != nil {
 		return nil, err
 	}
