@@ -11,7 +11,8 @@ import (
 )
 
 var (
-	_ resource.BulkRequestIterator = (*parquetReader)(nil)
+	_               resource.BulkRequestIterator = (*parquetReader)(nil)
+	openParquetFile                             = file.OpenParquetFile
 )
 
 func NewParquetReader(inputPath string, batchSize int64) (resource.BulkRequestIterator, error) {
@@ -35,7 +36,6 @@ type parquetReader struct {
 	defLevels []int16
 	repLevels []int16
 
-	// how many we already read
 	bufferSize  int
 	bufferIndex int
 	rowGroupIDX int
@@ -44,7 +44,6 @@ type parquetReader struct {
 	err error
 }
 
-// Next implements resource.BulkRequestIterator.
 func (r *parquetReader) Next() bool {
 	r.req = nil
 	for r.err == nil && r.reader != nil {
@@ -89,12 +88,10 @@ func (r *parquetReader) Next() bool {
 	return false
 }
 
-// Request implements resource.BulkRequestIterator.
 func (r *parquetReader) Request() *resourcepb.BulkRequest {
 	return r.req
 }
 
-// RollbackRequested implements resource.BulkRequestIterator.
 func (r *parquetReader) RollbackRequested() bool {
 	return r.err != nil
 }
@@ -107,9 +104,7 @@ func (r *parquetReader) close() {
 }
 
 func newResourceReader(inputPath string, batchSize int64) (*parquetReader, error) {
-	// memoryMap must be false: arrow-go does not implement mmap on Windows
-	// (returns "mmap not implemented on windows")
-	rdr, err := file.OpenParquetFile(inputPath, false)
+	rdr, err := openParquetFile(inputPath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +156,6 @@ func newResourceReader(inputPath string, batchSize int64) (*parquetReader, error
 		reader.value,
 	}
 
-	// Empty file, close and return
 	if rdr.NumRowGroups() < 1 {
 		err = rdr.Close()
 		reader.reader = nil
@@ -174,7 +168,6 @@ func newResourceReader(inputPath string, batchSize int64) (*parquetReader, error
 		return nil, err
 	}
 
-	// get the first batch
 	err = reader.readBulk()
 	if err != nil {
 		_ = rdr.Close()
@@ -210,20 +203,16 @@ func (r *parquetReader) readBulk() error {
 	return nil
 }
 
-//-------------------------------
-// Column support
-//-------------------------------
-
 type columnBuffer interface {
 	open(rgr *file.RowGroupReader) error
 	batch(batchSize int64, defLevels []int16, repLevels []int16) (int, error)
 }
 
 type stringColumn struct {
-	index  int // within the schema
+	index  int
 	reader *file.ByteArrayColumnChunkReader
 	buffer []parquet.ByteArray
-	count  int // the active count
+	count  int
 }
 
 func (c *stringColumn) open(rgr *file.RowGroupReader) error {
@@ -246,10 +235,10 @@ func (c *stringColumn) batch(batchSize int64, defLevels []int16, repLevels []int
 }
 
 type int32Column struct {
-	index  int // within the schemna
+	index  int
 	reader *file.Int32ColumnChunkReader
 	buffer []int32
-	count  int // the active count
+	count  int
 }
 
 func (c *int32Column) open(rgr *file.RowGroupReader) error {
@@ -270,7 +259,3 @@ func (c *int32Column) batch(batchSize int64, defLevels []int16, repLevels []int1
 	c.count = count
 	return count, err
 }
-
-//-------------------------------
-// Column support
-//-------------------------------

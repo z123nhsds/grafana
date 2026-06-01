@@ -2,9 +2,11 @@ package parquet
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
+	"github.com/apache/arrow-go/v18/parquet/file"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -45,7 +47,7 @@ func TestParquetWriteThenRead(t *testing.T) {
 					"namespace":       "ns",
 					"name":            "bbb",
 					"resourceVersion": "5678",
-					"generation":      -999, // deleted action
+					"generation":      -999,
 				},
 				"spec": map[string]any{
 					"hello": "second",
@@ -59,7 +61,7 @@ func TestParquetWriteThenRead(t *testing.T) {
 					"namespace":       "ns",
 					"name":            "ccc",
 					"resourceVersion": "789",
-					"generation":      3, // modified action
+					"generation":      3,
 				},
 				"spec": map[string]any{
 					"hello": "thirt",
@@ -79,7 +81,6 @@ func TestParquetWriteThenRead(t *testing.T) {
 			keys = append(keys, resource.SearchID(req.Key))
 		}
 
-		// Verify that we read all values
 		require.Equal(t, []string{
 			"ns/ggg/rrr/aaa",
 			"ns/ggg/rrr/bbb",
@@ -107,6 +108,22 @@ func TestParquetWriteThenRead(t *testing.T) {
 		require.NoError(t, reader.err)
 		require.Empty(t, keys)
 	})
+}
+
+func TestNewResourceReaderDisablesMemoryMap(t *testing.T) {
+	originalOpenParquetFile := openParquetFile
+	t.Cleanup(func() {
+		openParquetFile = originalOpenParquetFile
+	})
+
+	openParquetFile = func(_ string, memoryMap bool) (*file.Reader, error) {
+		require.False(t, memoryMap)
+		return nil, errors.New("boom")
+	}
+
+	reader, err := newResourceReader("ignored.parquet", 20)
+	require.Nil(t, reader)
+	require.EqualError(t, err, "boom")
 }
 
 func toKeyAndBytes(ctx context.Context, group string, res string, obj *unstructured.Unstructured) (context.Context, *resourcepb.ResourceKey, []byte) {

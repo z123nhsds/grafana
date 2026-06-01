@@ -21,7 +21,9 @@
   },
 
   "mixed": true,
+  "logs": true,
   "metrics": true,
+  "streaming": true,
 
   "queryOptions": {
     "minInterval": true

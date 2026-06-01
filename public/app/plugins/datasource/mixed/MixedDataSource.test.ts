@@ -13,7 +13,7 @@ import { CustomVariable, SceneFlexLayout, SceneVariableSet } from '@grafana/scen
 
 import { TemplateSrv } from '../../../features/templating/template_srv';
 
-import { MixedDatasource, MIXED_DATASOURCE_NAME } from './MixedDataSource';
+import { MixedDatasource, MIXED_DATASOURCE_NAME, mixedAggregateRequestId } from './MixedDataSource';
 
 const defaultDS = new MockObservableDataSourceApi('DefaultDS', [{ data: ['DDD'] }]);
 const datasourceSrv = new DatasourceSrvMock(defaultDS, {
@@ -26,6 +26,14 @@ const datasourceSrv = new DatasourceSrvMock(defaultDS, {
   Loki: new MockObservableDataSourceApi('Loki', [
     { data: ['A'], key: 'A' },
     { data: ['B'], key: 'B' },
+  ]),
+  StreamA: new MockObservableDataSourceApi('StreamA', [
+    { data: ['stream-a-1'], key: 'stream-a', state: LoadingState.Streaming },
+    { data: ['stream-a-2'], key: 'stream-a', state: LoadingState.Done },
+  ]),
+  StreamB: new MockObservableDataSourceApi('StreamB', [
+    { data: ['stream-b-1'], key: 'stream-b', state: LoadingState.Streaming },
+    { data: ['stream-b-2'], key: 'stream-b', state: LoadingState.Done },
   ]),
 });
 
@@ -48,9 +56,9 @@ describe('MixedDatasource', () => {
       const ds = new MixedDatasource({} as DataSourceInstanceSettings);
       const requestMixed = getQueryOptions({
         targets: [
-          { refId: 'QA', datasource: { uid: 'A' } }, // 1
-          { refId: 'QB', datasource: { uid: 'B' } }, // 2
-          { refId: 'QC', datasource: { uid: 'C' } }, // 3
+          { refId: 'QA', datasource: { uid: 'A' } },
+          { refId: 'QB', datasource: { uid: 'B' } },
+          { refId: 'QC', datasource: { uid: 'C' } },
         ],
       });
 
@@ -70,11 +78,11 @@ describe('MixedDatasource', () => {
       const ds = new MixedDatasource({} as DataSourceInstanceSettings);
       const requestMixed = getQueryOptions({
         targets: [
-          { refId: 'QA', datasource: { uid: 'A' } }, // 1
-          { refId: 'QD', datasource: { uid: 'D' } }, // 2
-          { refId: 'QB', datasource: { uid: 'B' } }, // 3
-          { refId: 'QE', datasource: { uid: 'E' } }, // 4
-          { refId: 'QC', datasource: { uid: 'C' } }, // 5
+          { refId: 'QA', datasource: { uid: 'A' } },
+          { refId: 'QD', datasource: { uid: 'D' } },
+          { refId: 'QB', datasource: { uid: 'B' } },
+          { refId: 'QE', datasource: { uid: 'E' } },
+          { refId: 'QC', datasource: { uid: 'C' } },
         ],
       });
 
@@ -209,6 +217,29 @@ describe('MixedDatasource', () => {
       expect(results[1].state).toBe(LoadingState.Loading);
       expect(results[2].key).toBe('mixed-1-');
       expect(results[2].state).toBe(LoadingState.Done);
+    });
+  });
+
+  it('should preserve streaming results across mixed data sources', async () => {
+    const ds = new MixedDatasource({} as DataSourceInstanceSettings);
+    const request = {
+      liveStreaming: true,
+      requestId: 'live-logs',
+      targets: [
+        { refId: 'A', datasource: { uid: 'StreamA' } },
+        { refId: 'B', datasource: { uid: 'StreamB' } },
+      ],
+    } as unknown as DataQueryRequest;
+
+    await expect(ds.query(request)).toEmitValuesWith((results) => {
+      expect(results.length).toBeGreaterThan(1);
+      expect(results.every((result) => result.key === mixedAggregateRequestId('live-logs'))).toBe(true);
+      expect(results.some((result) => result.state === LoadingState.Streaming)).toBe(true);
+
+      const last = results[results.length - 1];
+      expect(last.key).toBe(mixedAggregateRequestId('live-logs'));
+      expect(last.state).toBe(LoadingState.Done);
+      expect(last.data).toEqual(['stream-a-2', 'stream-b-2']);
     });
   });
 
