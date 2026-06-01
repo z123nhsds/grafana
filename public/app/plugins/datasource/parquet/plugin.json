@@ -1,0 +1,21 @@
+{
+  "type": "datasource",
+  "name": "Parquet",
+  "id": "parquet",
+  "info": {
+    "description": "Parquet data source with mixed datasource support",
+    "author": {
+      "name": "Grafana Labs"
+    },
+    "keywords": ["parquet", "datasource", "logs"],
+    "version": "1.0.0",
+    "updated": "2026-01-01"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=10.0.0",
+    "plugins": []
+  },
+  "metrics": true,
+  "logs": true,
+  "annotations": false
+}
