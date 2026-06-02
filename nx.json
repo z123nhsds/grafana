@@ -1,84 +1,34 @@
 {
   "namedInputs": {
-    "sharedGlobals": [
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/yarn.lock",
-      "{workspaceRoot}/.yarnrc.yml",
-      "{workspaceRoot}/.nvmrc",
-      "{workspaceRoot}/nx.json",
-      "{workspaceRoot}/.yarn/plugins/**",
-      "{workspaceRoot}/.yarn/patches/**",
-      "{workspaceRoot}/.yarn/releases/**"
-    ],
-    "goWorkspaceGlobals": [
+    "default": ["{projectRoot}/**/*"],
+    "goSources": [
+      "{projectRoot}/**/*.go",
+      "{projectRoot}/go.mod",
+      "{projectRoot}/go.sum",
       "{workspaceRoot}/go.work",
-      "{workspaceRoot}/go.work.sum",
-      "{workspaceRoot}/go.mod",
-      "{workspaceRoot}/go.sum",
-      "{workspaceRoot}/Makefile",
-      "{workspaceRoot}/.golangci.yml",
-      "{workspaceRoot}/.citools/**",
-      "{workspaceRoot}/scripts/go-workspace/**"
+      "{workspaceRoot}/go.work.sum"
     ],
-    "lintGlobals": [
-      "sharedGlobals",
-      "{workspaceRoot}/eslint.config.js",
-      "{workspaceRoot}/.prettierrc.js"
-    ],
-    "typecheckGlobals": [
-      "sharedGlobals",
-      "{workspaceRoot}/tsconfig.json"
-    ],
-    "testGlobals": [
-      "sharedGlobals"
-    ],
-    "i18nGlobals": [
-      "sharedGlobals",
-      "{workspaceRoot}/i18next.config.ts",
-      "{workspaceRoot}/public/locales/enterprise/i18next.config.ts"
-    ],
-    "knipGlobals": [
-      "typecheckGlobals",
-      "{workspaceRoot}/knip.config.ts",
-      "{workspaceRoot}/i18next.config.ts",
-      "{workspaceRoot}/public/locales/enterprise/i18next.config.ts"
+    "tsSources": [
+      "{projectRoot}/**/*.ts",
+      "{projectRoot}/**/*.tsx",
+      "{projectRoot}/**/*.js",
+      "{projectRoot}/**/*.jsx"
     ]
   },
   "targetDefaults": {
     "build": {
       "outputs": ["{projectRoot}/dist"],
-      "inputs": ["default", "^default", "sharedGlobals"],
       "cache": true
     },
     "generate": {
       "cache": true
     },
-    "lint": {
-      "inputs": ["default", "^default", "lintGlobals"],
+    "test:go": {
+      "inputs": ["default", "^default", "goSources"],
       "cache": true
     },
-    "typecheck": {
-      "inputs": ["default", "^default", "typecheckGlobals"],
-      "cache": true
-    },
-    "test:ci": {
-      "inputs": ["default", "^default", "testGlobals"],
-      "cache": true
-    },
-    "i18n-extract": {
-      "inputs": ["default", "^default", "i18nGlobals"],
-      "cache": true
-    },
-    "knip": {
-      "inputs": ["default", "^default", "knipGlobals"],
-      "cache": true
-    },
-    "lint-go": {
-      "inputs": ["goWorkspaceGlobals", "{workspaceRoot}/pkg/**/*.go", "{workspaceRoot}/apps/**/*.go"],
-      "cache": true
-    },
-    "test-go-unit": {
-      "inputs": ["goWorkspaceGlobals", "{workspaceRoot}/pkg/**/*.go", "{workspaceRoot}/apps/**/*.go"],
+    "lint:go": {
+      "inputs": ["default", "goSources"],
       "cache": true
     }
   },

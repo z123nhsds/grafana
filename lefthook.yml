@@ -39,6 +39,10 @@ pre-commit:
       stage_fixed: true
 
 pre-push:
+  parallel: true
   commands:
-    affected-tests:
-      run: node ./scripts/ci/affected-tests.mjs
+    test-affected-ts:
+      run: yarn nx affected --target=test:ci --base=$(git merge-base HEAD origin/main) --head=HEAD
+    test-affected-go:
+      glob: '*.go'
+      run: bash ./scripts/ci-go-affected.sh {push_files}

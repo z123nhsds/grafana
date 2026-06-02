@@ -72,6 +72,10 @@ targets := $(shell echo '$(sources)' | tr "," " ")
 .PHONY: all
 all: deps build
 
+.PHONY: ci-fast
+ci-fast: ## Run CI tasks in parallel and output JSON on failure
+	node scripts/ci-fast.mjs
+
 ##@ Dependencies
 
 .PHONY: deps-go
@@ -608,10 +612,6 @@ test-js: ## Run tests for frontend.
 
 .PHONY: test
 test: test-go test-js ## Run all tests.
-
-.PHONY: ci-fast
-ci-fast: ## Run CI-fast checks in parallel with structured failure output.
-	node ./scripts/ci/ci-fast.mjs
 
 ##@ Linting
 .PHONY: golangci-lint

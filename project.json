@@ -35,48 +35,6 @@
       "outputs": ["{workspaceRoot}/public/build"],
       "cache": true
     },
-    "lint": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "yarn run lint"
-      },
-      "cache": true
-    },
-    "typecheck": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "yarn run typecheck"
-      },
-      "cache": true
-    },
-    "test:ci": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "yarn run test:ci"
-      },
-      "cache": true
-    },
-    "knip": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "yarn run knip"
-      },
-      "cache": true
-    },
-    "lint-go": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "make lint-go"
-      },
-      "cache": true
-    },
-    "test-go-unit": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "make test-go-unit"
-      },
-      "cache": true
-    },
     "themes-generate": {
       "inputs": [
         "{workspaceRoot}/scripts/cli/generateSassVariableFiles.ts",
