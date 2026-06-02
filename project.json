@@ -1,53 +1,23 @@
 {
+  "$schema": "https://json.schemastore.org/project.json",
   "name": "grafana",
-  "$schema": "node_modules/nx/schemas/project-schema.json",
-  "projectType": "application",
+  "tags": [],
+  "implicitDependencies": [],
   "targets": {
-    "start": {
-      "dependsOn": [
-        "check-frontend-dev",
-        "themes-generate",
-        {
-          "projects": ["tag:scope:plugin"],
-          "target": "build"
-        }
-      ]
-    },
-    "build": {
-      "dependsOn": [
-        "themes-generate",
-        {
-          "projects": ["tag:scope:plugin"],
-          "target": "build"
-        }
-      ],
-      "outputs": ["{workspaceRoot}/public/build"],
+    "lint-go": {
+      "command": "make lint-go",
+      "inputs": ["{workspaceRoot}/**/*.go", "!{workspaceRoot}/**/*_test.go"],
       "cache": true
     },
-    "dev": {
-      "dependsOn": [
-        "themes-generate",
-        {
-          "projects": ["tag:scope:plugin"],
-          "target": "build"
-        }
-      ],
-      "outputs": ["{workspaceRoot}/public/build"],
+    "test-go-unit": {
+      "command": "make test-go-unit",
+      "inputs": ["{workspaceRoot}/**/*.go"],
       "cache": true
     },
-    "themes-generate": {
-      "inputs": [
-        "{workspaceRoot}/scripts/cli/generateSassVariableFiles.ts",
-        "{workspaceRoot}/packages/grafana-data/src/themes/**",
-        "{workspaceRoot}/packages/grafana-ui/src/themes/**",
-        "{workspaceRoot}/package.json"
-      ],
-      "outputs": [
-        "{workspaceRoot}/public/sass/_variables.generated.scss",
-        "{workspaceRoot}/public/sass/_variables.dark.generated.scss",
-        "{workspaceRoot}/public/sass/_variables.light.generated.scss",
-        "{workspaceRoot}/public/app/features/theme-playground/schema.json"
-      ],
+    "build-go": {
+      "command": "make build-go",
+      "inputs": ["{workspaceRoot}/**/*.go", "{workspaceRoot}/go.work", "{workspaceRoot}/go.mod"],
+      "outputs": ["{workspaceRoot}/bin/grafana"],
       "cache": true
     }
   }

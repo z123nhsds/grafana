@@ -37,3 +37,9 @@ pre-commit:
       glob: '*public/app/plugins/**/**/*.cue'
       run: make fix-cue
       stage_fixed: true
+
+pre-push:
+  parallel: true
+  commands:
+    pre-push-check:
+      run: node scripts/ci/pre-push-check.js

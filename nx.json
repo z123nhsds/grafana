@@ -6,11 +6,25 @@
     },
     "generate": {
       "cache": true
+    },
+    "typecheck": {
+      "cache": true
+    },
+    "test": {
+      "cache": true
+    },
+    "lint": {
+      "cache": true
     }
   },
   "tui": {
     "autoExit": true,
     "enabled": false
   },
-  "defaultBase": "main"
+  "defaultBase": "main",
+  "nxCloud": false,
+  "useDaemonProcess": true,
+  "affected": {
+    "defaultBase": "main"
+  }
 }
