@@ -17,6 +17,7 @@ import (
 	"github.com/grafana/grafana/pkg/plugins/backendplugin/coreplugin"
 	"github.com/grafana/grafana/pkg/plugins/backendplugin/provider"
 	"github.com/grafana/grafana/pkg/plugins/log"
+	"github.com/grafana/grafana/pkg/services/plugins/mixeddatasource"
 	"github.com/grafana/grafana/pkg/tsdb/azuremonitor"
 	cloudmonitoring "github.com/grafana/grafana/pkg/tsdb/cloud-monitoring"
 	"github.com/grafana/grafana/pkg/tsdb/cloudwatch"
@@ -55,6 +56,7 @@ const (
 	Pyroscope       = "grafana-pyroscope-datasource"
 	Parca           = "parca"
 	Jaeger          = "jaeger"
+	MixedDataSource = "mixed-datasource"
 )
 
 func init() {
@@ -119,6 +121,7 @@ func ProvideCoreRegistry(tracer trace.Tracer, am *azuremonitor.Service, cw *clou
 		Pyroscope:       asBackendPlugin(pyroscope),
 		Parca:           asBackendPlugin(parca),
 		Jaeger:          asBackendPlugin(jaeger),
+		MixedDataSource: asBackendPlugin(mixeddatasource.ProvideService()),
 	})
 }
 
@@ -248,6 +251,8 @@ func NewPlugin(pluginID string, httpClientProvider *httpclient.Provider, tracer 
 		svc = parca.ProvideService(httpClientProvider)
 	case Jaeger:
 		svc = jaeger.ProvideService(httpClientProvider)
+	case MixedDataSource:
+		svc = mixeddatasource.ProvideService()
 	default:
 		return nil, ErrCorePluginNotFound
 	}

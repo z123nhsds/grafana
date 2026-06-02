@@ -1,0 +1,16 @@
+{
+  "type": "panel",
+  "name": "Mixed Query Panel",
+  "id": "mixed-query-panel",
+  "info": {
+    "description": "Panel for rendering millions of points with RxJS, Redux, and virtual scrolling",
+    "author": {
+      "name": "Grafana Labs",
+      "url": "https://grafana.com"
+    },
+    "logos": {
+      "small": "img/icn-timeseries-panel.svg",
+      "large": "img/icn-timeseries-panel.svg"
+    }
+  }
+}
