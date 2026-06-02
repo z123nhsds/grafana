@@ -534,32 +534,6 @@ frontend-service: frontend-service-check
 
 ##@ Testing
 
-.PHONY: test-go
-test-go: test-go-unit test-go-integration
-
-.PHONY: test-go-unit
-test-go-unit: ## Run unit tests for backend with flags.
-	@echo "backend unit tests ($(SHARD)/$(SHARDS))"
-	$(GO) test $(GO_RACE_FLAG) $(GO_TEST_FLAGS) -v -short -timeout=30m \
-		$(shell ./scripts/ci/backend-tests/shard.sh -n$(SHARD) -m$(SHARDS) -s)
-
-.PHONY: test-go-unit-pretty
-test-go-unit-pretty: check-tparse
-	@if [ -z "$(FILES)" ]; then \
-		echo "Notice: FILES variable is not set. Try \"make test-go-unit-pretty FILES=./pkg/services/mysvc\""; \
-		exit 1; \
-	fi
-	$(GO) test $(GO_RACE_FLAG) $(GO_TEST_FLAGS) -timeout=10s $(FILES) -json | tparse -all
-
-.PHONY: test-go-integration
-test-go-integration: ## Run integration tests for backend with flags.
-	@echo "test backend integration tests"
-	$(GO) test $(GO_RACE_FLAG) $(GO_TEST_FLAGS) -count=1 -run "^TestIntegration" -covermode=atomic -coverprofile=$(GO_INTEGRATION_COVER_PROFILE) -timeout=5m \
-		$(shell ./scripts/ci/backend-tests/pkgs-with-tests-named.sh -b TestIntegration | ./scripts/ci/backend-tests/shard.sh -n$(SHARD) -m$(SHARDS) -d - -s)
-
-.PHONY: test-go-integration-alertmanager
-test-go-integration-alertmanager: ## Run integration tests for the remote alertmanager (config taken from the mimir_backend block).
-	@echo "test remote alertmanager integration tests"
 	$(GO) clean -testcache
 	AM_URL=http://localhost:8080 AM_TENANT_ID=test \
 	$(GO) test $(GO_RACE_FLAG) -count=1 -run "^TestIntegrationRemoteAlertmanager" -covermode=atomic -timeout=5m ./pkg/services/ngalert/...

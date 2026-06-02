@@ -1,16 +1,1 @@
 {
-  "targetDefaults": {
-    "build": {
-      "outputs": ["{projectRoot}/dist"],
-      "cache": true
-    },
-    "generate": {
-      "cache": true
-    }
-  },
-  "tui": {
-    "autoExit": true,
-    "enabled": false
-  },
-  "defaultBase": "main"
-}

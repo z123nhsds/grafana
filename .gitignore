@@ -236,8 +236,6 @@ deployment_tools_config.json
 
 .nx
 
-# Temporary file for backporting PRs
-.pr-body.txt
 
 # Core plugin builds
 public/app/plugins/**/dist/
