@@ -39,7 +39,6 @@ pre-commit:
       stage_fixed: true
 
 pre-push:
-  parallel: true
   commands:
-    pre-push-check:
-      run: node scripts/ci/pre-push-check.js
+    affected-tests:
+      run: node ./scripts/ci/affected-tests.mjs

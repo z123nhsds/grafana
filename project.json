@@ -1,23 +1,95 @@
 {
-  "$schema": "https://json.schemastore.org/project.json",
   "name": "grafana",
-  "tags": [],
-  "implicitDependencies": [],
+  "$schema": "node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
   "targets": {
+    "start": {
+      "dependsOn": [
+        "check-frontend-dev",
+        "themes-generate",
+        {
+          "projects": ["tag:scope:plugin"],
+          "target": "build"
+        }
+      ]
+    },
+    "build": {
+      "dependsOn": [
+        "themes-generate",
+        {
+          "projects": ["tag:scope:plugin"],
+          "target": "build"
+        }
+      ],
+      "outputs": ["{workspaceRoot}/public/build"],
+      "cache": true
+    },
+    "dev": {
+      "dependsOn": [
+        "themes-generate",
+        {
+          "projects": ["tag:scope:plugin"],
+          "target": "build"
+        }
+      ],
+      "outputs": ["{workspaceRoot}/public/build"],
+      "cache": true
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "yarn run lint"
+      },
+      "cache": true
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "yarn run typecheck"
+      },
+      "cache": true
+    },
+    "test:ci": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "yarn run test:ci"
+      },
+      "cache": true
+    },
+    "knip": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "yarn run knip"
+      },
+      "cache": true
+    },
     "lint-go": {
-      "command": "make lint-go",
-      "inputs": ["{workspaceRoot}/**/*.go", "!{workspaceRoot}/**/*_test.go"],
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "make lint-go"
+      },
       "cache": true
     },
     "test-go-unit": {
-      "command": "make test-go-unit",
-      "inputs": ["{workspaceRoot}/**/*.go"],
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "make test-go-unit"
+      },
       "cache": true
     },
-    "build-go": {
-      "command": "make build-go",
-      "inputs": ["{workspaceRoot}/**/*.go", "{workspaceRoot}/go.work", "{workspaceRoot}/go.mod"],
-      "outputs": ["{workspaceRoot}/bin/grafana"],
+    "themes-generate": {
+      "inputs": [
+        "{workspaceRoot}/scripts/cli/generateSassVariableFiles.ts",
+        "{workspaceRoot}/packages/grafana-data/src/themes/**",
+        "{workspaceRoot}/packages/grafana-ui/src/themes/**",
+        "{workspaceRoot}/package.json"
+      ],
+      "outputs": [
+        "{workspaceRoot}/public/sass/_variables.generated.scss",
+        "{workspaceRoot}/public/sass/_variables.dark.generated.scss",
+        "{workspaceRoot}/public/sass/_variables.light.generated.scss",
+        "{workspaceRoot}/public/app/features/theme-playground/schema.json"
+      ],
       "cache": true
     }
   }

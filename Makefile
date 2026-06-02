@@ -609,6 +609,10 @@ test-js: ## Run tests for frontend.
 .PHONY: test
 test: test-go test-js ## Run all tests.
 
+.PHONY: ci-fast
+ci-fast: ## Run CI-fast checks in parallel with structured failure output.
+	node ./scripts/ci/ci-fast.mjs
+
 ##@ Linting
 .PHONY: golangci-lint
 golangci-lint:
@@ -811,13 +815,9 @@ check-tparse:
 		exit 1; \
 	}
 
-.PHONY: ci-fast
-ci-fast: ## Run parallel CI checks (lint, typecheck, test, knip) with JSON output
-	@node scripts/ci/ci-fast.js
-
 .PHONY: help
 help: ## Display this help.
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 # check licenses of used dependencies (can be run using build image using
 # container/check-licenses target)
