@@ -1,0 +1,17 @@
+{
+  "type": "panel",
+  "name": "Multi Mix",
+  "id": "multimix",
+  "suggestions": true,
+  "info": {
+    "description": "Multi-datasource mixed query panel with Prometheus + Loki time-aligned merge",
+    "author": {
+      "name": "Grafana Labs",
+      "url": "https://grafana.com"
+    },
+    "logos": {
+      "small": "img/icn-multimix-panel.svg",
+      "large": "img/icn-multimix-panel.svg"
+    }
+  }
+}
