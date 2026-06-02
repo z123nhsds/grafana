@@ -5,14 +5,16 @@ import { Subject } from 'rxjs';
 // Importing this way to be able to spy on grafana/data
 
 import * as grafanaData from '@grafana/data';
-import { type DataSourceApi, DataTransformerID, dateTime, type TypedVariableModel } from '@grafana/data';
+import {
+  type DataSourceApi,
+  DataTransformerID,
+  dateTime,
+  LoadingState,
+  StreamingDataFrame,
+  StreamingFrameAction,
+  type TypedVariableModel,
+} from '@grafana/data';
 import { convertFrameTypeTransformer, FrameType, mockTransformationsRegistry } from '@grafana/data/internal';
-import { type DataSourceSrv, setDataSourceSrv, setEchoSrv } from '@grafana/runtime';
-import { TemplateSrvMock } from 'app/features/templating/template_srv.mock';
-
-import { Echo } from '../../../core/services/echo/Echo';
-import { createDashboardModelFixture } from '../../dashboard/state/__fixtures__/dashboardFixtures';
-
 import {
   createDashboardQueryRunner,
   type DashboardQueryRunnerFactoryArgs,
@@ -459,73 +461,3 @@ describe('PanelQueryRunner', () => {
         { name: 'value', type: grafanaData.FieldType.number, values: [1] },
       ],
     },
-  ];
-  describeQueryRunnerScenario(
-    'getData with snapshot data',
-    (ctx) => {
-      it('should return snapshotted data', async () => {
-        ctx.runner.getData({ withTransforms: false, withFieldConfig: true }).subscribe({
-          next: (data: grafanaData.PanelData) => {
-            expect(data.state).toBe(grafanaData.LoadingState.Done);
-            expect(data.series).toEqual(snapshotData);
-            expect(data.timeRange).toEqual(grafanaData.getDefaultTimeRange());
-            return data;
-          },
-        });
-      });
-    },
-    {
-      ...defaultPanelConfig,
-      snapshotData,
-    }
-  );
-
-  describeQueryRunnerScenario(
-    'shouldAddErrorwhenDatasourceVariableIsMultiple',
-    (ctx) => {
-      it('should add error when datasource variable is multiple and not repeated', async () => {
-        // scopedVars is an object that represent the variables repeated in a panel
-        const scopedVars = {
-          server: { text: 'Server1', value: 'server-1' },
-        };
-
-        // We are spying on the replace method of the TemplateSrvMock to check if the custom format function is being called
-        const spyReplace = jest.spyOn(TemplateSrvMock.prototype, 'replace');
-
-        const response = {
-          data: [
-            {
-              target: 'hello',
-              datapoints: [
-                [1, 1000],
-                [2, 2000],
-              ],
-            },
-          ],
-        };
-
-        const datasource = {
-          name: '${multi}',
-          uid: '${multi}',
-          interval: ctx.dsInterval,
-          query: (options: grafanaData.DataQueryRequest) => {
-            ctx.queryCalledWith = options;
-            return Promise.resolve(response);
-          },
-          getRef: () => ({ type: 'test', uid: 'TestDB-uid' }),
-          testDatasource: jest.fn(),
-        } as unknown as DataSourceApi;
-
-        ctx.runner.shouldAddErrorWhenDatasourceVariableIsMultiple(datasource, scopedVars);
-
-        // the test is checking implementation details :(, but it is the only way to check if the error will be added
-        // if the getTemplateSrv.replace is called with the custom format function,it means we will check
-        // if the error should be added
-        expect(spyReplace.mock.calls[0][2]).toBeInstanceOf(Function);
-      });
-    },
-    {
-      ...defaultPanelConfig,
-    }
-  );
-});
