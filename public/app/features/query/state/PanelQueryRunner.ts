@@ -28,6 +28,7 @@ import {
   preProcessPanelData,
   type ApplyFieldOverrideOptions,
   type StreamingDataFrame,
+  StreamingFrameAction,
   DataTopic,
 } from '@grafana/data';
 import { toDataQueryError } from '@grafana/runtime';
@@ -75,6 +76,17 @@ export function getNextRequestId() {
 export interface GetDataOptions {
   withTransforms: boolean;
   withFieldConfig: boolean;
+}
+
+function mergeStreamingFieldValues(newValues: ArrayLike<unknown>, previousValues: ArrayLike<unknown>): unknown[] {
+  return Array.from({ length: newValues.length }, (_: unknown, index: number) => {
+    const value = newValues[index];
+    if (value != null) {
+      return value;
+    }
+
+    return index < previousValues.length ? previousValues[index] : value;
+  });
 }
 
 export class PanelQueryRunner {
@@ -158,6 +170,8 @@ export class PanelQueryRunner {
                   // https://github.com/grafana/grafana/pull/41492#issuecomment-970281430
                   lastProcessedFrames[0].fields.length === streamingDataFrame.fields.length
                 ) {
+                  const shouldMergeNullValues = streamingDataFrame.packetInfo.action === StreamingFrameAction.Append;
+
                   processedData = {
                     ...processedData,
                     series: lastProcessedFrames.map((frame, frameIndex) => ({
@@ -165,7 +179,9 @@ export class PanelQueryRunner {
                       length: data.series[frameIndex].length,
                       fields: frame.fields.map((field, fieldIndex) => ({
                         ...field,
-                        values: data.series[frameIndex].fields[fieldIndex].values,
+                        values: shouldMergeNullValues
+                          ? mergeStreamingFieldValues(data.series[frameIndex].fields[fieldIndex].values, field.values)
+                          : data.series[frameIndex].fields[fieldIndex].values,
                         state: {
                           ...field.state,
                           calcs: undefined,

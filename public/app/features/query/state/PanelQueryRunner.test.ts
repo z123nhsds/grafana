@@ -5,7 +5,15 @@ import { Subject } from 'rxjs';
 // Importing this way to be able to spy on grafana/data
 
 import * as grafanaData from '@grafana/data';
-import { type DataSourceApi, DataTransformerID, dateTime, type TypedVariableModel } from '@grafana/data';
+import {
+  type DataSourceApi,
+  DataTransformerID,
+  dateTime,
+  LoadingState,
+  StreamingDataFrame,
+  StreamingFrameAction,
+  type TypedVariableModel,
+} from '@grafana/data';
 import { convertFrameTypeTransformer, FrameType, mockTransformationsRegistry } from '@grafana/data/internal';
 import { type DataSourceSrv, setDataSourceSrv, setEchoSrv } from '@grafana/runtime';
 import { TemplateSrvMock } from 'app/features/templating/template_srv.mock';
@@ -451,6 +459,155 @@ describe('PanelQueryRunner', () => {
       getDataSupport: () => ({ annotations: false, alertStates: false }),
     }
   );
+
+  describe('streaming field merging', () => {
+    const panelConfig = {
+      getFieldOverrideOptions: () => ({
+        fieldConfig: {
+          defaults: {},
+          overrides: [],
+        },
+        replaceVariables: (value: string) => value,
+        theme: grafanaData.createTheme(),
+      }),
+      getTransformations: () => undefined,
+      getDataSupport: () => ({ annotations: false, alertStates: false }),
+      configRev: 1,
+    };
+
+    const createStreamingFrame = ({
+      values,
+      action,
+      schemaChanged,
+    }: {
+      values: unknown[][];
+      action: StreamingFrameAction;
+      schemaChanged: boolean;
+    }) => {
+      const frame = StreamingDataFrame.fromDataFrameJSON(
+        {
+          schema: {
+            fields: [
+              { name: 'time', type: grafanaData.FieldType.time },
+              { name: 'value', type: grafanaData.FieldType.number },
+            ],
+          },
+          data: { values },
+        },
+        { action }
+      );
+
+      frame.packetInfo.action = action;
+      frame.packetInfo.schemaChanged = schemaChanged;
+
+      return frame;
+    };
+
+    const createRunner = async () => {
+      applyFieldOverridesMock.mockImplementation(({ data }) => data);
+
+      const packets = new Subject<grafanaData.DataQueryResponse>();
+      const runner = new PanelQueryRunner(panelConfig);
+      const results: grafanaData.PanelData[] = [];
+
+      runner.getData({ withTransforms: false, withFieldConfig: true }).subscribe({
+        next: (data: grafanaData.PanelData) => {
+          results.push(data);
+        },
+      });
+
+      const datasource = {
+        name: 'TestDB',
+        uid: 'TestDB-uid',
+        query: () => packets.asObservable(),
+        getRef: () => ({ type: 'test', uid: 'TestDB-uid' }),
+        testDatasource: jest.fn(),
+      } as unknown as DataSourceApi;
+
+      await runner.run({
+        datasource,
+        timezone: 'browser',
+        timeRange: {
+          from: dateTime('2023-01-01T12:00:00Z'),
+          to: dateTime('2023-01-02T12:00:00Z'),
+          raw: { from: '1d', to: 'now' },
+        },
+        maxDataPoints: 200,
+        minInterval: undefined,
+        queries: [{ refId: 'A' }],
+      });
+
+      return { packets, results };
+    };
+
+    it('should keep previous non-null values for append packets', async () => {
+      const { packets, results } = await createRunner();
+
+      packets.next({
+        state: LoadingState.Streaming,
+        data: [
+          createStreamingFrame({
+            values: [
+              [1000, 2000],
+              [1, 2],
+            ],
+            action: StreamingFrameAction.Replace,
+            schemaChanged: true,
+          }),
+        ],
+      });
+
+      packets.next({
+        state: LoadingState.Streaming,
+        data: [
+          createStreamingFrame({
+            values: [
+              [1000, 2000],
+              [null, 3],
+            ],
+            action: StreamingFrameAction.Append,
+            schemaChanged: false,
+          }),
+        ],
+      });
+
+      expect(results.at(-1)?.series[0].fields[1].values).toEqual([1, 3]);
+    });
+
+    it('should not reuse previous values for replace packets', async () => {
+      const { packets, results } = await createRunner();
+
+      packets.next({
+        state: LoadingState.Streaming,
+        data: [
+          createStreamingFrame({
+            values: [
+              [1000, 2000],
+              [1, 2],
+            ],
+            action: StreamingFrameAction.Replace,
+            schemaChanged: true,
+          }),
+        ],
+      });
+
+      packets.next({
+        state: LoadingState.Streaming,
+        data: [
+          createStreamingFrame({
+            values: [
+              [1000, 2000],
+              [null, null],
+            ],
+            action: StreamingFrameAction.Replace,
+            schemaChanged: false,
+          }),
+        ],
+      });
+
+      expect(results.at(-1)?.series[0].fields[1].values).toEqual([null, null]);
+    });
+  });
 
   const snapshotData: grafanaData.DataFrameDTO[] = [
     {
