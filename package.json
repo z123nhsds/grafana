@@ -31,8 +31,6 @@
     "e2e:acceptance": "NODE_OPTIONS='-C @grafana-app/source' yarn playwright test --grep @acceptance",
     "e2e:plugin:build": "nx run-many -t build --projects='@test-plugins/*'",
     "e2e:plugin:build:dev": "nx run-many -t dev --projects='@test-plugins/*' --maxParallel=100",
-    "test:go": "make test-go-unit",
-    "lint:go": "make lint-go",
     "test": "jest --notify --watch",
     "test:coverage": "jest --coverage",
     "test:coverage:by-codeowner": "yarn codeowners-manifest && node scripts/test-coverage-by-codeowner.js",

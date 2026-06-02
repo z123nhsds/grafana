@@ -41,8 +41,8 @@ pre-commit:
 pre-push:
   parallel: true
   commands:
-    test-affected-ts:
-      run: yarn nx affected --target=test:ci --base=$(git merge-base HEAD origin/main) --head=HEAD
-    test-affected-go:
-      glob: '*.go'
-      run: bash ./scripts/ci-go-affected.sh {push_files}
+    changed-tests:
+      run: bash ./scripts/lefthook/pre-push.sh {0}
+      skip:
+        - merge
+        - rebase

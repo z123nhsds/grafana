@@ -236,6 +236,8 @@ deployment_tools_config.json
 
 .nx
 
+.ci-fast-results
+
 # Temporary file for backporting PRs
 .pr-body.txt
 

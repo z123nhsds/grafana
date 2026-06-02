@@ -72,10 +72,6 @@ targets := $(shell echo '$(sources)' | tr "," " ")
 .PHONY: all
 all: deps build
 
-.PHONY: ci-fast
-ci-fast: ## Run CI tasks in parallel and output JSON on failure
-	node scripts/ci-fast.mjs
-
 ##@ Dependencies
 
 .PHONY: deps-go
@@ -537,6 +533,32 @@ frontend-service: frontend-service-check
 	bash ./devenv/frontend-service/run.sh
 
 ##@ Testing
+
+.PHONY: ci-fast
+ci-fast: ## Run lint-go, lint-ts, typecheck, test-go-unit, test-js, and knip in parallel. Outputs structured JSON on failure.
+	@chmod +x ./scripts/ci/ci-fast.sh
+	@bash ./scripts/ci/ci-fast.sh
+
+.PHONY: ci-fast-nx
+ci-fast-nx: sync-nx-go-modules ## Run CI checks with NX orchestration for better caching.
+	@chmod +x ./scripts/nx/go-test-executor.sh
+	@echo "Running lint-go with NX cache..."
+	@npx nx run-many -t lint --projects='tag:scope:go-module' --parallel=4 || true
+	@echo "Running lint-ts..."
+	@yarn run lint
+	@echo "Running typecheck..."
+	@yarn run typecheck
+	@echo "Running go unit tests with NX cache..."
+	@npx nx run-many -t test --projects='tag:scope:go-module' --parallel=4
+	@echo "Running JS unit tests..."
+	@yarn run test:ci
+	@echo "Running knip..."
+	@yarn run knip
+
+.PHONY: sync-nx-go-modules
+sync-nx-go-modules: ## Sync go.work modules to NX project configurations for caching.
+	@chmod +x ./scripts/nx/sync-go-workspace.sh
+	@bash ./scripts/nx/sync-go-workspace.sh
 
 .PHONY: test-go
 test-go: test-go-unit test-go-integration
