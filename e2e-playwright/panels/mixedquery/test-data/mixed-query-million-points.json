@@ -1,0 +1,107 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "mixed-query-million-points",
+    "title": "Mixed Query Million Points Test",
+    "tags": ["panel-tests", "mixedquery", "performance"],
+    "timezone": "browser",
+    "schemaVersion": 40,
+    "version": 1,
+    "refresh": "",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "type": "mixedquery",
+        "title": "Multi-Source Mixed Query",
+        "gridPos": {
+          "h": 20,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        },
+        "datasource": {
+          "type": "grafana-testdata-datasource",
+          "uid": "grafana-testdata-datasource"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "prometheus-ds"
+            },
+            "scenarioId": "random_walk",
+            "expr": "up{job=\"prometheus\"}",
+            "legendFormat": "Prometheus Source",
+            "interval": "10s",
+            "maxDataPoints": 1000000
+          },
+          {
+            "refId": "B",
+            "datasource": {
+              "type": "loki",
+              "uid": "loki-ds"
+            },
+            "scenarioId": "random_walk",
+            "expr": "{job=\"loki\"} | logfmt",
+            "legendFormat": "Loki Source",
+            "interval": "20s",
+            "maxDataPoints": 500000
+          },
+          {
+            "refId": "C",
+            "datasource": {
+              "type": "tempo",
+              "uid": "tempo-ds"
+            },
+            "scenarioId": "random_walk",
+            "query": "{job=\"tempo\"}",
+            "legendFormat": "Tempo Source",
+            "interval": "30s",
+            "maxDataPoints": 333333
+          }
+        ],
+        "options": {
+          "mergeStrategy": "time-align",
+          "virtualScroll": true,
+          "rowHeight": 32,
+          "bufferRows": 5,
+          "streaming": false,
+          "showSourceLabel": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "cellOptions": {
+                "type": "auto"
+              },
+              "inspect": false
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                }
+              ]
+            }
+          },
+          "overrides": []
+        }
+      }
+    ],
+    "templating": {
+      "list": []
+    },
+    "annotations": {
+      "list": []
+    }
+  },
+  "overwrite": true
+}

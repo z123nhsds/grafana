@@ -1,0 +1,94 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "mixed-query-streaming",
+    "title": "Mixed Query Streaming Test",
+    "tags": ["panel-tests", "mixedquery", "streaming"],
+    "timezone": "browser",
+    "schemaVersion": 40,
+    "version": 1,
+    "refresh": "5s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "type": "mixedquery",
+        "title": "Streaming Mixed Query",
+        "gridPos": {
+          "h": 20,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        },
+        "datasource": {
+          "type": "grafana-testdata-datasource",
+          "uid": "grafana-testdata-datasource"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "prometheus-ds"
+            },
+            "scenarioId": "streaming_client",
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "prometheus",
+            "interval": "1s"
+          },
+          {
+            "refId": "B",
+            "datasource": {
+              "type": "loki",
+              "uid": "loki-ds"
+            },
+            "scenarioId": "streaming_client",
+            "expr": "{job=\"app\"} |= \"error\"",
+            "legendFormat": "loki",
+            "interval": "1s"
+          }
+        ],
+        "options": {
+          "mergeStrategy": "time-align",
+          "virtualScroll": true,
+          "rowHeight": 32,
+          "bufferRows": 5,
+          "streaming": true,
+          "showSourceLabel": true,
+          "streamBufferSize": 1000
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "cellOptions": {
+                "type": "auto"
+              },
+              "inspect": false
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                }
+              ]
+            }
+          },
+          "overrides": []
+        }
+      }
+    ],
+    "templating": {
+      "list": []
+    },
+    "annotations": {
+      "list": []
+    }
+  },
+  "overwrite": true
+}
