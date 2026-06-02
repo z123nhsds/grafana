@@ -1,4 +1,20 @@
 {
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*"],
+    "goSources": [
+      "{projectRoot}/**/*.go",
+      "{projectRoot}/go.mod",
+      "{projectRoot}/go.sum",
+      "{workspaceRoot}/go.work",
+      "{workspaceRoot}/go.work.sum"
+    ],
+    "tsSources": [
+      "{projectRoot}/**/*.ts",
+      "{projectRoot}/**/*.tsx",
+      "{projectRoot}/**/*.js",
+      "{projectRoot}/**/*.jsx"
+    ]
+  },
   "targetDefaults": {
     "build": {
       "outputs": ["{projectRoot}/dist"],
@@ -10,18 +26,20 @@
     "test": {
       "cache": true,
       "inputs": [
-        "{projectRoot}/**/*",
-        "{projectRoot}/tsconfig.json",
-        "{projectRoot}/jest.config.js",
+        "default",
+        "^default",
         "{workspaceRoot}/jest.config.js",
         "{workspaceRoot}/tsconfig.json"
       ]
     },
+    "test:go": {
+      "inputs": ["default", "^default", "goSources"],
+      "cache": true
+    },
     "typecheck": {
       "cache": true,
       "inputs": [
-        "{projectRoot}/**/*.ts",
-        "{projectRoot}/**/*.tsx",
+        "tsSources",
         "{projectRoot}/tsconfig.json",
         "{workspaceRoot}/tsconfig.json"
       ]
@@ -29,11 +47,13 @@
     "lint": {
       "cache": true,
       "inputs": [
-        "{projectRoot}/**/*",
-        "eslint.config.js",
-        ".eslintrc.js",
+        "default",
         "{workspaceRoot}/eslint.config.js"
       ]
+    },
+    "lint:go": {
+      "inputs": ["default", "goSources", "{workspaceRoot}/.golangci.yml"],
+      "cache": true
     }
   },
   "plugins": [

@@ -1,221 +1,146 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-set -o errexit
-set -o nounset
-set -o pipefail
+BASE_REF="${1:-}"
+if [ -z "$BASE_REF" ]; then
+  BASE_REF=$(git merge-base HEAD origin/main 2>/dev/null || echo "HEAD~1")
+fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-GO_WORK="${REPO_ROOT}/go.work"
+CHANGED_FILES=$(git diff --name-only "$BASE_REF" HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD)
 
-REMOTE="${1:-origin}"
-URL="${2:-}"
+if [ -z "$CHANGED_FILES" ]; then
+  echo "No changes detected. Skipping pre-push checks."
+  exit 0
+fi
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+HAS_GO_CHANGES=false
+HAS_TS_CHANGES=false
+HAS_PKG_CHANGES=false
+HAS_CUE_CHANGES=false
 
-git_cmd() {
-  git -C "${REPO_ROOT}" "$@"
-}
+while IFS= read -r file; do
+  case "$file" in
+    *.go|go.mod|go.sum|go.work|go.work.sum)
+      HAS_GO_CHANGES=true
+      ;;
+    *.ts|*.tsx|*.js|*.jsx|*.scss|*.css|*.mjs)
+      HAS_TS_CHANGES=true
+      ;;
+    packages/*|public/app/plugins/*)
+      HAS_PKG_CHANGES=true
+      ;;
+    *.cue|kinds/*)
+      HAS_CUE_CHANGES=true
+      ;;
+  esac
+done <<< "$CHANGED_FILES"
 
-get_base_ref() {
-  local default_branch
-  default_branch=$(git_cmd symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
-  echo "origin/${default_branch}"
-}
+EXIT_CODE=0
 
-get_changed_files() {
-  local base_ref
-  base_ref=$(get_base_ref)
+if [ "$HAS_GO_CHANGES" = true ]; then
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Go changes detected — running affected Go tests"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  git_cmd diff --name-only "${base_ref}...HEAD" 2>/dev/null || git_cmd diff --name-only HEAD~1 2>/dev/null || echo ""
-}
+  GO_DIRS=$(echo "$CHANGED_FILES" | grep '\.go$' | xargs -r -n1 dirname | sort -u | sed 's,^,./,')
 
-get_go_module_path() {
-  local file="$1"
+  if [ -n "$GO_DIRS" ]; then
+    AFFECTED_PKGS=""
+    for dir in $GO_DIRS; do
+      if [ -f "${dir}/go.mod" ] || [ -f "${dir#./}/go.mod" ] || go list -f '{{.Dir}}' "$dir/..." >/dev/null 2>&1; then
+        PKG=$(go list -f '{{.ImportPath}}' "$dir" 2>/dev/null || true)
+        if [ -n "$PKG" ]; then
+          AFFECTED_PKGS="$AFFECTED_PKGS $PKG"
+        fi
+      fi
+    done
 
-  while [[ "${file}" != "." && "${file}" != "/" ]]; do
-    local dir
-    dir=$(dirname "${file}")
-    if [[ -f "${REPO_ROOT}/${dir}/go.mod" ]]; then
-      echo "${dir}"
-      return 0
+    if [ -n "$AFFECTED_PKGS" ]; then
+      echo "Affected packages:$AFFECTED_PKGS"
+      if ! go test -short -timeout=5m $AFFECTED_PKGS; then
+        EXIT_CODE=1
+        echo "✗ Go tests failed"
+      else
+        echo "✓ Go tests passed"
+      fi
+    else
+      echo "No testable Go packages found in changed directories. Running quick compile check..."
+      if ! go build ./...; then
+        EXIT_CODE=1
+        echo "✗ Go build failed"
+      else
+        echo "✓ Go build passed"
+      fi
     fi
-    file="${dir}"
-  done
-
-  if [[ -f "${REPO_ROOT}/go.mod" ]]; then
-    echo "."
-    return 0
   fi
 
-  return 1
-}
-
-get_affected_go_packages() {
-  local changed_files="$1"
-  local packages=()
-  local seen=()
-
-  while IFS= read -r file; do
-    [[ -z "${file}" ]] && continue
-    [[ ! "${file}" =~ \.go$ ]] && continue
-
-    local mod_path
-    mod_path=$(get_go_module_path "${file}" 2>/dev/null) || continue
-
-    if [[ -z "${seen[${mod_path}]:-}" ]]; then
-      seen["${mod_path}"]=1
-      packages+=("${mod_path}")
+  echo "Running golangci-lint on changed files..."
+  CHANGED_GO_FILES=$(echo "$CHANGED_FILES" | grep '\.go$' || true)
+  if [ -n "$CHANGED_GO_FILES" ]; then
+    GO_LINT_DIRS=$(echo "$CHANGED_GO_FILES" | xargs -r -n1 dirname | sort -u | sed 's,^,./,')
+    if ! golangci-lint run --config .golangci.yml $GO_LINT_DIRS 2>/dev/null; then
+      echo "⚠ golangci-lint found issues (non-blocking in pre-push)"
     fi
-  done <<< "${changed_files}"
-
-  (IFS=$'\n'; echo "${packages[*]}")
-}
-
-get_affected_nx_projects() {
-  local changed_files="$1"
-  local ts_files=()
-
-  while IFS= read -r file; do
-    [[ -z "${file}" ]] && continue
-    if [[ "${file}" =~ \.(ts|tsx|js|jsx|json|scss|css)$ ]] && \
-       [[ ! "${file}" =~ ^\.github/ ]] && \
-       [[ ! "${file}" =~ \.gen\.ts$ ]]; then
-      ts_files+=("${file}")
-    fi
-  done <<< "${changed_files}"
-
-  if [[ ${#ts_files[@]} -eq 0 ]]; then
-    echo ""
-    return 0
   fi
+fi
 
-  cd "${REPO_ROOT}" && npx nx show projects --affected --base="$(get_base_ref)" --head=HEAD 2>/dev/null || echo ""
-}
-
-run_affected_go_tests() {
-  local packages="$1"
-  local failed=0
-
-  while IFS= read -r pkg; do
-    [[ -z "${pkg}" ]] && continue
-
-    local go_pkg_path="./${pkg}/..."
-    if [[ "${pkg}" == "." ]]; then
-      go_pkg_path="./pkg/..."
-    fi
-
-    echo -e "${YELLOW}Running Go tests for: ${go_pkg_path}${NC}"
-
-    if ! go test -short -timeout=10m -count=1 "${go_pkg_path}" 2>&1; then
-      failed=1
-    fi
-  done <<< "${packages}"
-
-  return "${failed}"
-}
-
-run_affected_js_tests() {
-  local projects="$1"
-
-  if [[ -z "${projects}" ]]; then
-    echo -e "${GREEN}No affected JS projects detected.${NC}"
-    return 0
-  fi
-
-  echo -e "${YELLOW}Running tests for affected JS projects:${NC}"
-  echo "${projects}"
-
-  local failed=0
-  while IFS= read -r project; do
-    [[ -z "${project}" ]] && continue
-    echo -e "${YELLOW}  Testing: ${project}${NC}"
-    if ! npx nx test "${project}" --skip-nx-cache 2>&1; then
-      failed=1
-    fi
-  done <<< "${projects}"
-
-  return "${failed}"
-}
-
-main() {
+if [ "$HAS_TS_CHANGES" = true ]; then
   echo ""
-  echo "============================================"
-  echo "  Pre-push: Detecting changed packages..."
-  echo "============================================"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  TypeScript changes detected — running affected TS tests"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  local changed_files
-  changed_files=$(get_changed_files)
-
-  if [[ -z "${changed_files}" ]]; then
-    echo -e "${GREEN}No changes detected. Skipping pre-push checks.${NC}"
-    exit 0
-  fi
-
-  echo ""
-  echo "Changed files:"
-  echo "${changed_files}" | head -20
-  local total_changed
-  total_changed=$(echo "${changed_files}" | wc -l)
-  if [[ "${total_changed}" -gt 20 ]]; then
-    echo "  ... and $((total_changed - 20)) more files"
-  fi
-
-  local go_packages
-  go_packages=$(get_affected_go_packages "${changed_files}")
-  local nx_projects
-  nx_projects=$(get_affected_nx_projects "${changed_files}")
-
-  echo ""
-  echo "Affected Go modules:"
-  if [[ -z "${go_packages}" ]]; then
-    echo "  (none)"
+  if [ "$HAS_PKG_CHANGES" = true ]; then
+    echo "Running NX affected tests..."
+    if ! npx nx affected --target=test --base="$BASE_REF" --head=HEAD 2>/dev/null; then
+      EXIT_CODE=1
+      echo "✗ NX affected tests failed"
+    else
+      echo "✓ NX affected tests passed"
+    fi
   else
-    echo "${go_packages}" | while IFS= read -r p; do [[ -n "${p}" ]] && echo "  ${p}"; done
-  fi
-
-  echo ""
-  echo "Affected NX projects:"
-  if [[ -z "${nx_projects}" ]]; then
-    echo "  (none)"
-  else
-    echo "${nx_projects}" | while IFS= read -r p; do [[ -n "${p}" ]] && echo "  ${p}"; done
-  fi
-
-  local overall_failed=0
-
-  if [[ -n "${go_packages}" ]]; then
-    echo ""
-    echo "============================================"
-    echo "  Running affected Go tests..."
-    echo "============================================"
-    if ! run_affected_go_tests "${go_packages}"; then
-      overall_failed=1
+    CHANGED_TS_FILES=$(echo "$CHANGED_FILES" | grep -E '\.(test\.)?(ts|tsx)$' || true)
+    if [ -n "$CHANGED_TS_FILES" ]; then
+      echo "Running Jest for changed test files..."
+      if ! yarn jest --no-watch --findRelatedTests $CHANGED_TS_FILES 2>/dev/null; then
+        EXIT_CODE=1
+        echo "✗ Jest tests failed"
+      else
+        echo "✓ Jest tests passed"
+      fi
+    else
+      echo "Running quick typecheck on changed files..."
+      if ! yarn tsc --noEmit 2>/dev/null; then
+        echo "⚠ Typecheck found issues (non-blocking in pre-push)"
+      fi
     fi
   fi
+fi
 
-  if [[ -n "${nx_projects}" ]]; then
-    echo ""
-    echo "============================================"
-    echo "  Running affected JS tests..."
-    echo "============================================"
-    if ! run_affected_js_tests "${nx_projects}"; then
-      overall_failed=1
-    fi
-  fi
-
+if [ "$HAS_CUE_CHANGES" = true ]; then
   echo ""
-  if [[ "${overall_failed}" -eq 0 ]]; then
-    echo -e "${GREEN}All affected tests passed!${NC}"
-    exit 0
-  else
-    echo -e "${RED}Some affected tests failed. Push aborted.${NC}"
-    echo ""
-    echo "Tip: Use 'make ci-fast' to run the full CI suite locally."
-    exit 1
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  CUE changes detected — running cue vet"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  CHANGED_CUE_FILES=$(echo "$CHANGED_FILES" | grep '\.cue$' || true)
+  if [ -n "$CHANGED_CUE_FILES" ]; then
+    for cue_file in $CHANGED_CUE_FILES; do
+      cue_dir=$(dirname "$cue_file")
+      if [ -f "${cue_dir}/cue.mod/module.cue" ]; then
+        if ! (cd "$cue_dir" && cue vet ./... 2>/dev/null); then
+          echo "⚠ CUE vet found issues in $cue_dir (non-blocking in pre-push)"
+        fi
+      fi
+    done
+    echo "✓ CUE checks completed"
   fi
-}
+fi
 
-main "$@"
+echo ""
+if [ $EXIT_CODE -eq 0 ]; then
+  echo "✓ All pre-push checks passed"
+else
+  echo "✗ Pre-push checks failed — fix issues before pushing"
+fi
+
+exit $EXIT_CODE

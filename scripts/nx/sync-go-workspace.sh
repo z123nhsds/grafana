@@ -1,157 +1,92 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-set -o errexit
-set -o nounset
-set -o pipefail
+REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+GO_WORK_FILE="$REPO_ROOT/go.work"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-GO_WORK="${REPO_ROOT}/go.work"
-NX_PROJECTS_DIR="${REPO_ROOT}/.nx/go-modules"
+if [ ! -f "$GO_WORK_FILE" ]; then
+  echo "Error: go.work not found at $GO_WORK_FILE"
+  exit 1
+fi
 
-GO_WORK_TOOL="${REPO_ROOT}/scripts/go-workspace/main.go"
+MODULE_PATHS=$(go run "$REPO_ROOT/scripts/go-workspace/main.go" list-submodules --path "$GO_WORK_FILE")
 
-mkdir -p "${NX_PROJECTS_DIR}"
+NX_CACHE_DIR="$REPO_ROOT/.nx/cache"
+mkdir -p "$NX_CACHE_DIR"
 
-list_go_modules() {
-  go run "${GO_WORK_TOOL}" list-submodules --path "${GO_WORK}" --delimiter $'\n'
-}
+GO_WORK_HASH_FILE="$NX_CACHE_DIR/go-work-hash"
+CURRENT_HASH=""
+if [ -f "$GO_WORK_HASH_FILE" ]; then
+  CURRENT_HASH=$(cat "$GO_WORK_HASH_FILE")
+fi
 
-get_module_name() {
-  local mod_path="$1"
-  head -1 "${REPO_ROOT}/${mod_path}/go.mod" | sed 's/^module //'
-}
+NEW_HASH=$(cat "$GO_WORK_FILE" "$REPO_ROOT/go.work.sum" 2>/dev/null | sha256sum | cut -d' ' -f1)
 
-read_go_deps() {
-  local mod_path="$1"
-  local go_mod="${REPO_ROOT}/${mod_path}/go.mod"
+if [ "$CURRENT_HASH" = "$NEW_HASH" ]; then
+  echo "go.work unchanged — NX project configs are up to date."
+  exit 0
+fi
 
-  grep 'require' -A 1000 "${go_mod}" 2>/dev/null | \
-    grep -v 'require' | \
-    grep -v '^$' | \
-    grep -v '^//' | \
-    grep -v 'indirect' | \
-    sed 's/^\s*//' | \
-    awk '{print $1}' | \
-    grep 'github.com/grafana/grafana' || true
-}
+echo "Syncing go.work modules to NX project configurations..."
 
-generate_nx_project() {
-  local mod_path="$1"
-  local mod_name
-  mod_name=$(get_module_name "${mod_path}")
+for module_path in $MODULE_PATHS; do
+  FULL_PATH="$REPO_ROOT/$module_path"
+  PROJECT_JSON="$FULL_PATH/project.json"
 
-  local project_name
-  project_name=$(echo "${mod_path}" | sed 's|^\./||' | sed 's|/|-|g')
-  [[ "${project_name}" == "." ]] && project_name="grafana-root"
-
-  local deps_json="[]"
-  local deps
-  deps=$(read_go_deps "${mod_path}")
-
-  if [[ -n "${deps}" ]]; then
-    local dep_list=""
-    while IFS= read -r dep; do
-      local dep_path
-      dep_path=$(echo "${dep}" | sed 's|github.com/grafana/grafana/||')
-      local dep_name
-      dep_name=$(echo "${dep_path}" | sed 's|/|-|g')
-      if [[ -n "${dep_list}" ]]; then
-        dep_list="${dep_list}, "
-      fi
-      dep_list="${dep_list}\"${dep_name}\""
-    done <<< "${deps}"
-    deps_json="[${dep_list}]"
+  if [ ! -d "$FULL_PATH" ]; then
+    continue
   fi
 
-  cat > "${NX_PROJECTS_DIR}/${project_name}.json" <<EOF
+  MODULE_NAME=""
+  if [ -f "$FULL_PATH/go.mod" ]; then
+    MODULE_NAME=$(head -1 "$FULL_PATH/go.mod" | awk '{print $2}')
+  fi
+
+  RELATIVE_PATH="$module_path"
+  PROJECT_NAME=$(echo "$RELATIVE_PATH" | tr '/' '-')
+
+  if [ -f "$PROJECT_JSON" ]; then
+    EXISTING_TAGS=$(jq -r '.tags // [] | if type == "array" then join(",") else . end' "$PROJECT_JSON" 2>/dev/null || echo "")
+    if echo "$EXISTING_TAGS" | grep -q "scope:go-module"; then
+      echo "  ✓ $module_path — already tagged as go-module"
+      continue
+    fi
+
+    UPDATED_TAGS=$(echo "$EXISTING_TAGS" | jq -R -s '
+      split(",") | map(select(length > 0)) + ["scope:go-module"] | unique
+    ' 2>/dev/null || echo '["scope:go-module"]')
+
+    jq --argjson tags "$UPDATED_TAGS" '.tags = $tags' "$PROJECT_JSON" > "$PROJECT_JSON.tmp" && mv "$PROJECT_JSON.tmp" "$PROJECT_JSON"
+    echo "  ✓ $module_path — added scope:go-module tag"
+  else
+    cat > "$PROJECT_JSON" << EOF
 {
-  "name": "${project_name}",
-  "\$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "projectType": "library",
-  "sourceRoot": "${mod_path}",
-  "tags": ["scope:go-module", "type:backend"],
+  "name": "$PROJECT_NAME",
+  "root": "$module_path",
+  "tags": ["scope:go-module"],
   "targets": {
     "test": {
       "executor": "nx:run-commands",
-      "inputs": [
-        "{projectRoot}/**/*.go",
-        "{projectRoot}/go.mod",
-        "{projectRoot}/go.sum",
-        "{workspaceRoot}/go.work",
-        "{workspaceRoot}/go.work.sum"
-      ],
-      "outputs": [
-        "{projectRoot}/.nx-go-test-cache"
-      ],
-      "cache": true,
       "options": {
-        "cwd": "{projectRoot}",
-        "command": "go test -short -count=1 -timeout=10m ./... 2>&1 | tee {projectRoot}/.nx-go-test-cache/output.txt; exit \${PIPESTATUS[0]}"
-      }
+        "command": "cd $module_path && go test -short -timeout=5m ./..."
+      },
+      "inputs": ["default", "^default", "goSources"],
+      "cache": true
     },
     "lint": {
       "executor": "nx:run-commands",
-      "inputs": [
-        "{projectRoot}/**/*.go",
-        "{projectRoot}/go.mod",
-        "{projectRoot}/go.sum"
-      ],
-      "cache": true,
       "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "make lint-go GO_LINT_FILES=${mod_path}/..."
-      }
-    },
-    "build": {
-      "executor": "nx:run-commands",
-      "inputs": [
-        "{projectRoot}/**/*.go",
-        "{projectRoot}/go.mod",
-        "{projectRoot}/go.sum",
-        "{workspaceRoot}/go.work",
-        "{workspaceRoot}/go.work.sum"
-      ],
-      "outputs": [
-        "{projectRoot}/bin"
-      ],
-      "cache": true,
-      "options": {
-        "cwd": "{projectRoot}",
-        "command": "go build ./..."
-      }
+        "command": "golangci-lint run --config {workspaceRoot}/.golangci.yml $module_path/..."
+      },
+      "inputs": ["default", "goSources", "{workspaceRoot}/.golangci.yml"],
+      "cache": true
     }
-  },
-  "implicitDependencies": {
-    "go.work": "*",
-    "go.work.sum": "*"
   }
 }
 EOF
+    echo "  ✓ $module_path — created project.json with go-module targets"
+  fi
+done
 
-  echo "  Generated: ${project_name} (${mod_path})"
-}
-
-main() {
-  echo "Syncing go.work modules to NX project configurations..."
-  echo ""
-
-  rm -rf "${NX_PROJECTS_DIR}"
-  mkdir -p "${NX_PROJECTS_DIR}"
-
-  local modules
-  modules=$(list_go_modules)
-
-  while IFS= read -r mod_path; do
-    [[ -z "${mod_path}" ]] && continue
-    generate_nx_project "${mod_path}"
-  done <<< "${modules}"
-
-  echo ""
-  echo "Done! Generated $(ls "${NX_PROJECTS_DIR}" | wc -l) NX project configurations."
-  echo "Location: ${NX_PROJECTS_DIR}"
-  echo ""
-  echo "To use: npx nx run-many -t test --projects='tag:scope:go-module'"
-  echo "Or:     npx nx affected -t test --projects='tag:scope:go-module'"
-}
-
-main "$@"
+echo "$NEW_HASH" > "$GO_WORK_HASH_FILE"
+echo "NX project sync complete. Hash: $NEW_HASH"

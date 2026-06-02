@@ -39,7 +39,6 @@ pre-commit:
       stage_fixed: true
 
 pre-push:
-  parallel: true
   commands:
     changed-tests:
       run: bash ./scripts/lefthook/pre-push.sh {0}

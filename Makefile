@@ -545,15 +545,15 @@ ci-fast-nx: sync-nx-go-modules ## Run CI checks with NX orchestration for better
 	@echo "Running lint-go with NX cache..."
 	@npx nx run-many -t lint --projects='tag:scope:go-module' --parallel=4 || true
 	@echo "Running lint-ts..."
-	@yarn run lint
+	yarn run lint
 	@echo "Running typecheck..."
-	@yarn run typecheck
+	yarn run typecheck
 	@echo "Running go unit tests with NX cache..."
 	@npx nx run-many -t test --projects='tag:scope:go-module' --parallel=4
 	@echo "Running JS unit tests..."
-	@yarn run test:ci
+	yarn run test:ci
 	@echo "Running knip..."
-	@yarn run knip
+	yarn run knip
 
 .PHONY: sync-nx-go-modules
 sync-nx-go-modules: ## Sync go.work modules to NX project configurations for caching.

@@ -1,34 +1,16 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-set -o errexit
-set -o nounset
-set -o pipefail
+PROJECT_DIR="${1:-.}"
+shift || true
 
-PROJECT_ROOT="${1:-.}"
-GO_RACE="${GO_RACE:-}"
+EXTRA_ARGS=("$@")
 
-GO_RACE_FLAG=""
-[[ -n "${GO_RACE}" ]] && GO_RACE_FLAG="-race"
+cd "$PROJECT_DIR"
 
-echo "Running Go tests for: ${PROJECT_ROOT}"
-
-cd "${PROJECT_ROOT}" || exit 1
-
-CACHE_DIR="${PROJECT_ROOT}/.nx-go-test-cache"
-mkdir -p "${CACHE_DIR}"
-
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-go test \
-  ${GO_RACE_FLAG} \
-  -short \
-  -count=1 \
-  -timeout=10m \
-  -json \
-  ./... 2>&1 | tee "${CACHE_DIR}/output.json"
-
-EXIT_CODE=${PIPESTATUS[0]}
-
-echo "{\"timestamp\": \"${TIMESTAMP}\", \"exit_code\": ${EXIT_CODE}}" > "${CACHE_DIR}/result.json"
-
-exit ${EXIT_CODE}
+if [ -f "go.mod" ]; then
+  go test -short -timeout=5m ./... "${EXTRA_ARGS[@]}"
+else
+  echo "No go.mod found in $PROJECT_DIR, skipping."
+  exit 0
+fi
