@@ -1,0 +1,27 @@
+{
+  "type": "datasource",
+  "name": "Hybrid Mixed",
+  "id": "grafana-hybrid-mixed-datasource",
+  "category": "tsdb",
+  "builtIn": true,
+  "backend": true,
+  "metrics": true,
+  "logs": true,
+  "streaming": true,
+  "queryOptions": {
+    "minInterval": true
+  },
+  "info": {
+    "description": "Time-aligns Prometheus and Loki query results into a single merged frame.",
+    "author": {
+      "name": "Grafana Labs",
+      "url": "https://grafana.com"
+    },
+    "links": [
+      {
+        "name": "Repository",
+        "url": "https://github.com/grafana/grafana"
+      }
+    ]
+  }
+}

@@ -25,6 +25,7 @@ import (
 	testdatasource "github.com/grafana/grafana/pkg/tsdb/grafana-testdata-datasource"
 	"github.com/grafana/grafana/pkg/tsdb/grafanads"
 	"github.com/grafana/grafana/pkg/tsdb/graphite"
+	"github.com/grafana/grafana/pkg/tsdb/hybridmixed"
 	"github.com/grafana/grafana/pkg/tsdb/influxdb"
 	"github.com/grafana/grafana/pkg/tsdb/jaeger"
 	"github.com/grafana/grafana/pkg/tsdb/loki"
@@ -55,18 +56,16 @@ const (
 	Pyroscope       = "grafana-pyroscope-datasource"
 	Parca           = "parca"
 	Jaeger          = "jaeger"
+	HybridMixed     = "grafana-hybrid-mixed-datasource"
 )
 
 func init() {
-	// Non-optimal global solution to replace plugin SDK default loggers for core plugins.
 	sdklog.DefaultLogger = &logWrapper{logger: log.New("plugin.coreplugin")}
 	backend.Logger = sdklog.DefaultLogger
 	backend.NewLoggerWith = func(args ...any) sdklog.Logger {
 		for i, arg := range args {
-			// Obtain logger name from args.
 			if s, ok := arg.(string); ok && s == "logger" {
 				l := &logWrapper{logger: log.New(args[i+1].(string))}
-				// new args slice without logger name and logger name value
 				if len(args) > 2 {
 					newArgs := make([]any, 0, len(args)-2)
 					newArgs = append(newArgs, args[:i]...)
@@ -85,9 +84,7 @@ type Registry struct {
 }
 
 func NewRegistry(store map[string]backendplugin.PluginFactoryFunc) *Registry {
-	return &Registry{
-		store: store,
-	}
+	return &Registry{store: store}
 }
 
 func ProvideCoreProvider(coreRegistry *Registry) plugins.BackendFactoryProvider {
@@ -98,7 +95,6 @@ func ProvideCoreRegistry(tracer trace.Tracer, am *azuremonitor.Service, cw *clou
 	grap *graphite.Service, idb *influxdb.Service, lk *loki.Service, otsdb *opentsdb.Service,
 	pr *prometheus.Service, t *tempo.Service, td *testdatasource.Service, pg *postgres.Service, my *mysql.Service,
 	ms *mssql.Service, graf *grafanads.Service, pyroscope *pyroscope.Service, parca *parca.Service, jaeger *jaeger.Service) *Registry {
-	// Non-optimal global solution to replace plugin SDK default tracer for core plugins.
 	sdktracing.InitDefaultTracer(tracer)
 
 	return NewRegistry(map[string]backendplugin.PluginFactoryFunc{
@@ -119,6 +115,7 @@ func ProvideCoreRegistry(tracer trace.Tracer, am *azuremonitor.Service, cw *clou
 		Pyroscope:       asBackendPlugin(pyroscope),
 		Parca:           asBackendPlugin(parca),
 		Jaeger:          asBackendPlugin(jaeger),
+		HybridMixed:     asBackendPlugin(hybridmixed.ProvideService()),
 	})
 }
 
@@ -191,21 +188,15 @@ func (l *logWrapper) Level() sdklog.Level {
 }
 
 func (l *logWrapper) With(args ...any) sdklog.Logger {
-	return &logWrapper{
-		logger: l.logger.New(args...),
-	}
+	return &logWrapper{logger: l.logger.New(args...)}
 }
 
 func (l *logWrapper) FromContext(ctx context.Context) sdklog.Logger {
-	return &logWrapper{
-		logger: l.logger.FromContext(ctx),
-	}
+	return &logWrapper{logger: l.logger.FromContext(ctx)}
 }
 
 var ErrCorePluginNotFound = errors.New("core plugin not found")
 
-// NewPlugin factory for creating and initializing a single core plugin.
-// Note: cfg only needed for mssql connection pooling defaults.
 func NewPlugin(pluginID string, httpClientProvider *httpclient.Provider, tracer trace.Tracer) (*plugins.Plugin, error) {
 	jsonData := plugins.JSONData{
 		ID:       pluginID,
@@ -248,6 +239,8 @@ func NewPlugin(pluginID string, httpClientProvider *httpclient.Provider, tracer 
 		svc = parca.ProvideService(httpClientProvider)
 	case Jaeger:
 		svc = jaeger.ProvideService(httpClientProvider)
+	case HybridMixed:
+		svc = hybridmixed.ProvideService()
 	default:
 		return nil, ErrCorePluginNotFound
 	}

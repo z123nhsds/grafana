@@ -1,0 +1,18 @@
+{
+  "type": "panel",
+  "name": "Hybrid Mixed",
+  "id": "hybrid-mixed-panel",
+  "info": {
+    "description": "Virtualized panel for aligned Prometheus and Loki merged results.",
+    "author": {
+      "name": "Grafana Labs",
+      "url": "https://grafana.com"
+    },
+    "links": [
+      {
+        "name": "Repository",
+        "url": "https://github.com/grafana/grafana"
+      }
+    ]
+  }
+}
