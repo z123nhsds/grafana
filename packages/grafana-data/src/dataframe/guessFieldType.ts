@@ -119,7 +119,7 @@ export const guessFieldTypes = (series: DataFrame, guessDefined = false): DataFr
           // Calculate a reasonable schema value
           return {
             ...field,
-            type: guessFieldTypeForField(field) || FieldType.other,
+            type: guessFieldTypeForField(field) || field.type || FieldType.other,
           };
         }),
       };

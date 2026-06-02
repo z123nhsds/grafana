@@ -13,6 +13,7 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/gtime"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/grafana/grafana/pkg/api/dtos"
 	"github.com/grafana/grafana/pkg/apimachinery/errutil"
 	"github.com/grafana/grafana/pkg/apimachinery/identity"
@@ -29,6 +30,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/validations"
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/tsdb/grafanads"
+	"github.com/grafana/grafana/pkg/tsdb/mixed-timeseries"
 )
 
 const (
@@ -210,6 +212,32 @@ func (s *ServiceImpl) executeConcurrentQueries(ctx context.Context, user identit
 					}
 				}
 			}
+		}
+	}
+
+	var allFrames []*data.Frame
+	refIdOrder := make([]string, 0, len(resp.Responses))
+	frameRefIdMap := make(map[int]string)
+	for refId, dr := range resp.Responses {
+		refIdOrder = append(refIdOrder, refId)
+		for _, f := range dr.Frames {
+			frameRefIdMap[len(allFrames)] = refId
+			allFrames = append(allFrames, f)
+		}
+	}
+
+	if len(allFrames) > 1 {
+		aligned := mixedtimeseries.TimeAlign(allFrames)
+		refIdx := 0
+		for _, refId := range refIdOrder {
+			dr := resp.Responses[refId]
+			alignedForRef := []*data.Frame{}
+			for refIdx < len(aligned) && frameRefIdMap[refIdx] == refId {
+				alignedForRef = append(alignedForRef, aligned[refIdx])
+				refIdx++
+			}
+			dr.Frames = alignedForRef
+			resp.Responses[refId] = dr
 		}
 	}
 

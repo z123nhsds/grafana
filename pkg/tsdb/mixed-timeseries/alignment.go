@@ -1,19 +1,20 @@
 package mixedtimeseries
 
 import (
+	"sort"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 )
 
-func timeAlign(frames []*data.Frame) []*data.Frame {
+func TimeAlign(frames []*data.Frame) []*data.Frame {
 	if len(frames) == 0 {
 		return frames
 	}
 
 	nonEmptyFrames := make([]*data.Frame, 0, len(frames))
 	for _, f := range frames {
-		if f != nil && f.Rows() > 0 {
+		if f != nil && f.Rows() > 0 && isTimeSeriesFrame(f) {
 			nonEmptyFrames = append(nonEmptyFrames, f)
 		}
 	}
@@ -33,8 +34,8 @@ func timeAlign(frames []*data.Frame) []*data.Frame {
 			continue
 		}
 		for i := 0; i < timeField.Len(); i++ {
-			if v, ok := timeField.At(i).(time.Time); ok {
-				timeSet[v.UnixMilli()] = struct{}{}
+			if ms, ok := extractTimeMilli(timeField, i); ok {
+				timeSet[ms] = struct{}{}
 			}
 		}
 	}
@@ -47,6 +48,7 @@ func timeAlign(frames []*data.Frame) []*data.Frame {
 	for t := range timeSet {
 		allTimes = append(allTimes, t)
 	}
+	sort.Slice(allTimes, func(i, j int) bool { return allTimes[i] < allTimes[j] })
 
 	result := make([]*data.Frame, len(frames))
 	for idx, f := range frames {
@@ -62,9 +64,14 @@ func timeAlign(frames []*data.Frame) []*data.Frame {
 
 		existingTimes := make(map[int64]int)
 		for i := 0; i < timeField.Len(); i++ {
-			if v, ok := timeField.At(i).(time.Time); ok {
-				existingTimes[v.UnixMilli()] = i
+			if ms, ok := extractTimeMilli(timeField, i); ok {
+				existingTimes[ms] = i
 			}
+		}
+
+		if len(existingTimes) == 0 {
+			result[idx] = f
+			continue
 		}
 
 		needsAlignment := false
@@ -90,7 +97,9 @@ func alignFrameToTimes(frame *data.Frame, allTimes []int64, existingTimes map[in
 	newFields := make(data.Fields, len(frame.Fields))
 
 	for fieldIdx, field := range frame.Fields {
-		if field.Type() == data.FieldTypeTime {
+		ft := field.Type()
+
+		if ft == data.FieldTypeTime || ft == data.FieldTypeNullableTime {
 			times := make([]time.Time, len(allTimes))
 			for i, ms := range allTimes {
 				times[i] = time.UnixMilli(ms)
@@ -102,32 +111,38 @@ func alignFrameToTimes(frame *data.Frame, allTimes []int64, existingTimes map[in
 			continue
 		}
 
-		switch field.Type() {
-		case data.FieldTypeFloat64:
+		switch ft {
+		case data.FieldTypeFloat64, data.FieldTypeNullableFloat64:
 			values := make([]*float64, len(allTimes))
 			for i, ms := range allTimes {
 				if rowIdx, exists := existingTimes[ms]; exists && rowIdx < field.Len() {
-					if v, ok := field.At(rowIdx).(float64); ok {
+					if v, ok := field.At(rowIdx).(*float64); ok {
+						values[i] = v
+					} else if v, ok := field.At(rowIdx).(float64); ok {
 						values[i] = &v
 					}
 				}
 			}
 			newFields[fieldIdx] = data.NewField(field.Name, field.Labels, values)
-		case data.FieldTypeInt64:
+		case data.FieldTypeInt64, data.FieldTypeNullableInt64:
 			values := make([]*int64, len(allTimes))
 			for i, ms := range allTimes {
 				if rowIdx, exists := existingTimes[ms]; exists && rowIdx < field.Len() {
-					if v, ok := field.At(rowIdx).(int64); ok {
+					if v, ok := field.At(rowIdx).(*int64); ok {
+						values[i] = v
+					} else if v, ok := field.At(rowIdx).(int64); ok {
 						values[i] = &v
 					}
 				}
 			}
 			newFields[fieldIdx] = data.NewField(field.Name, field.Labels, values)
-		case data.FieldTypeString:
+		case data.FieldTypeString, data.FieldTypeNullableString:
 			values := make([]*string, len(allTimes))
 			for i, ms := range allTimes {
 				if rowIdx, exists := existingTimes[ms]; exists && rowIdx < field.Len() {
-					if v, ok := field.At(rowIdx).(string); ok {
+					if v, ok := field.At(rowIdx).(*string); ok {
+						values[i] = v
+					} else if v, ok := field.At(rowIdx).(string); ok {
 						values[i] = &v
 					}
 				}
@@ -147,9 +162,37 @@ func alignFrameToTimes(frame *data.Frame, allTimes []int64, existingTimes map[in
 
 func findTimeField(frame *data.Frame) *data.Field {
 	for _, field := range frame.Fields {
-		if field.Type() == data.FieldTypeTime {
+		if field.Type() == data.FieldTypeTime || field.Type() == data.FieldTypeNullableTime {
 			return field
 		}
 	}
 	return nil
+}
+
+func extractTimeMilli(field *data.Field, idx int) (int64, bool) {
+	v := field.At(idx)
+	switch tv := v.(type) {
+	case time.Time:
+		return tv.UnixMilli(), true
+	case *time.Time:
+		if tv != nil {
+			return tv.UnixMilli(), true
+		}
+	}
+	return 0, false
+}
+
+func isTimeSeriesFrame(frame *data.Frame) bool {
+	timeField := findTimeField(frame)
+	if timeField == nil {
+		return false
+	}
+	for _, field := range frame.Fields {
+		ft := field.Type()
+		if ft == data.FieldTypeFloat64 || ft == data.FieldTypeNullableFloat64 ||
+			ft == data.FieldTypeInt64 || ft == data.FieldTypeNullableInt64 {
+			return true
+		}
+	}
+	return false
 }
