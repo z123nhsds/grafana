@@ -28,10 +28,11 @@ import {
   preProcessPanelData,
   type ApplyFieldOverrideOptions,
   type StreamingDataFrame,
+  StreamingFrameAction,
   DataTopic,
 } from '@grafana/data';
-import { toDataQueryError } from '@grafana/runtime';
 import { ExpressionDatasourceRef } from '@grafana/runtime/internal';
+import { toDataQueryError } from '@grafana/runtime';
 import { isStreamingDataFrame } from 'app/features/live/data/utils';
 import { getDatasourceSrv } from 'app/features/plugins/datasource_srv';
 import { getTemplateSrv } from 'app/features/templating/template_srv';
@@ -77,16 +78,26 @@ export interface GetDataOptions {
   withFieldConfig: boolean;
 }
 
+function mergeStreamingFieldValues(newValues: ArrayLike<unknown>, previousValues: ArrayLike<unknown>): unknown[] {
+  return Array.from({ length: newValues.length }, (_: unknown, index: number) => {
+    const value = newValues[index];
+    if (value != null) {
+      return value;
+    }
+
+    return index < previousValues.length ? previousValues[index] : value;
+  });
+}
+
 export class PanelQueryRunner {
-  private subject: ReplaySubject<PanelData>;
+  private dataConfigSource: DataConfigSource;
+  private templateSrv = getTemplateSrv();
+  private subject = new ReplaySubject<PanelData>(1);
   private subscription?: Unsubscribable;
   private lastResult?: PanelData;
-  private dataConfigSource: DataConfigSource;
   private lastRequest?: DataQueryRequest;
-  private templateSrv = getTemplateSrv();
 
   constructor(dataConfigSource: DataConfigSource) {
-    this.subject = new ReplaySubject(1);
     this.dataConfigSource = dataConfigSource;
   }
 
@@ -100,7 +111,6 @@ export class PanelQueryRunner {
     let lastProcessedFrames: DataFrame[] = [];
     let lastRawFrames: DataFrame[] = [];
     let lastTransformations: DataTransformerConfig[] | undefined;
-    let isFirstPacket = true;
     let lastConfigRev = -1;
 
     if (this.dataConfigSource.snapshotData) {
@@ -158,6 +168,8 @@ export class PanelQueryRunner {
                   // https://github.com/grafana/grafana/pull/41492#issuecomment-970281430
                   lastProcessedFrames[0].fields.length === streamingDataFrame.fields.length
                 ) {
+                  const shouldMergeNullValues = streamingDataFrame.packetInfo.action === StreamingFrameAction.Append;
+
                   processedData = {
                     ...processedData,
                     series: lastProcessedFrames.map((frame, frameIndex) => ({
@@ -165,7 +177,9 @@ export class PanelQueryRunner {
                       length: data.series[frameIndex].length,
                       fields: frame.fields.map((field, fieldIndex) => ({
                         ...field,
-                        values: data.series[frameIndex].fields[fieldIndex].values,
+                        values: shouldMergeNullValues
+                          ? mergeStreamingFieldValues(data.series[frameIndex].fields[fieldIndex].values, field.values)
+                          : data.series[frameIndex].fields[fieldIndex].values,
                         state: {
                           ...field.state,
                           calcs: undefined,
@@ -179,8 +193,7 @@ export class PanelQueryRunner {
                 }
               }
 
-              if (fieldConfig != null && (isFirstPacket || !streamingPacketWithSameSchema)) {
-                lastConfigRev = this.dataConfigSource.configRev!;
+              if (!streamingPacketWithSameSchema) {
                 processedData = {
                   ...processedData,
                   series: applyFieldOverrides({
@@ -199,7 +212,7 @@ export class PanelQueryRunner {
                     },
                   });
                 }
-                isFirstPacket = false;
+                lastConfigRev = this.dataConfigSource.configRev!;
               }
             }
 
