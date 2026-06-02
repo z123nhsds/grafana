@@ -163,15 +163,23 @@ export class PanelQueryRunner {
                     series: lastProcessedFrames.map((frame, frameIndex) => ({
                       ...frame,
                       length: data.series[frameIndex].length,
-                      fields: frame.fields.map((field, fieldIndex) => ({
-                        ...field,
-                        values: data.series[frameIndex].fields[fieldIndex].values,
-                        state: {
-                          ...field.state,
-                          calcs: undefined,
-                          range: undefined,
-                        },
-                      })),
+                      fields: frame.fields.map((field, fieldIndex) => {
+                        const newValues = data.series[frameIndex].fields[fieldIndex].values;
+                        const prevValues = field.values;
+                        const mergedValues = newValues.map(
+                          (v: unknown, idx: number) =>
+                            v != null ? v : idx < prevValues.length ? prevValues[idx] : v
+                        );
+                        return {
+                          ...field,
+                          values: mergedValues,
+                          state: {
+                            ...field.state,
+                            calcs: undefined,
+                            range: undefined,
+                          },
+                        };
+                      }),
                     })),
                   };
 

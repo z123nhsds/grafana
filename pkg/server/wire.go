@@ -203,6 +203,7 @@ import (
 	"github.com/grafana/grafana/pkg/tsdb/influxdb"
 	"github.com/grafana/grafana/pkg/tsdb/jaeger"
 	"github.com/grafana/grafana/pkg/tsdb/loki"
+	mixedtimeseries "github.com/grafana/grafana/pkg/tsdb/mixed-timeseries"
 	"github.com/grafana/grafana/pkg/tsdb/mssql"
 	"github.com/grafana/grafana/pkg/tsdb/mysql"
 	"github.com/grafana/grafana/pkg/tsdb/opentsdb"
@@ -325,6 +326,7 @@ var wireBasicSet = wire.NewSet(
 	pyroscope.ProvideService,
 	parca.ProvideService,
 	jaeger.ProvideService,
+	mixedtimeseries.ProvideService,
 	datasourceservice.ProvideCacheService,
 	wire.Bind(new(datasources.CacheService), new(*datasourceservice.CacheServiceImpl)),
 	encryptionservice.ProvideEncryptionService,
