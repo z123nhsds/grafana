@@ -88,23 +88,7 @@ func alignSingleFrame(frame *data.Frame, targetTimestamps []time.Time, step time
 		return nil
 	}
 
-	type alignedPoint struct {
-		timestampNano int64
-		rowIdx        int
-	}
-
-	alignedPoints := make([]alignedPoint, 0, timeField.Len())
-	for rowIdx := 0; rowIdx < timeField.Len(); rowIdx++ {
-		ts, ok := fieldTimeValue(timeField.At(rowIdx))
-		if !ok {
-			continue
-		}
-
-		alignedPoints = append(alignedPoints, alignedPoint{
-			timestampNano: alignTimestamp(ts, step).UnixNano(),
-			rowIdx:        rowIdx,
-		})
-	}
+	alignedRowIndices := alignFrameRowIndices(timeField, targetTimestamps, step)
 
 	resultFields := make([]*data.Field, 0, len(frame.Fields))
 	alignedTimes := make([]time.Time, len(targetTimestamps))
@@ -125,15 +109,9 @@ func alignSingleFrame(frame *data.Frame, targetTimestamps []time.Time, step time
 			alignedField.Config = field.Config.Copy()
 		}
 
-		pointIdx := 0
-		for targetIdx, targetTimestamp := range targetTimestamps {
-			targetTimestampNano := targetTimestamp.UnixNano()
-			for pointIdx < len(alignedPoints) && alignedPoints[pointIdx].timestampNano < targetTimestampNano {
-				pointIdx++
-			}
-
-			if pointIdx < len(alignedPoints) && alignedPoints[pointIdx].timestampNano == targetTimestampNano {
-				alignedField.Set(targetIdx, field.At(alignedPoints[pointIdx].rowIdx))
+		for targetIdx, rowIdx := range alignedRowIndices {
+			if rowIdx >= 0 {
+				alignedField.Set(targetIdx, field.At(rowIdx))
 			}
 		}
 
@@ -147,6 +125,56 @@ func alignSingleFrame(frame *data.Frame, targetTimestamps []time.Time, step time
 	}
 
 	return result
+}
+
+func alignFrameRowIndices(timeField *data.Field, targetTimestamps []time.Time, step time.Duration) []int {
+	targetTimestampNanos := make([]int64, len(targetTimestamps))
+	for idx, targetTimestamp := range targetTimestamps {
+		targetTimestampNanos[idx] = targetTimestamp.UnixNano()
+	}
+
+	type alignedPoint struct {
+		timestampNano int64
+		rowIdx        int
+	}
+
+	alignedPoints := make([]alignedPoint, 0, timeField.Len())
+	for rowIdx := 0; rowIdx < timeField.Len(); rowIdx++ {
+		ts, ok := fieldTimeValue(timeField.At(rowIdx))
+		if !ok {
+			continue
+		}
+
+		alignedPoints = append(alignedPoints, alignedPoint{
+			timestampNano: alignTimestamp(ts, step).UnixNano(),
+			rowIdx:        rowIdx,
+		})
+	}
+
+	rowIndices := make([]int, len(targetTimestamps))
+	for idx := range rowIndices {
+		rowIndices[idx] = -1
+	}
+
+	pointIdx := 0
+	targetIdx := 0
+	for pointIdx < len(alignedPoints) && targetIdx < len(targetTimestampNanos) {
+		pointTimestampNano := alignedPoints[pointIdx].timestampNano
+		targetTimestampNano := targetTimestampNanos[targetIdx]
+
+		switch {
+		case pointTimestampNano < targetTimestampNano:
+			pointIdx++
+		case pointTimestampNano > targetTimestampNano:
+			targetIdx++
+		default:
+			rowIndices[targetIdx] = alignedPoints[pointIdx].rowIdx
+			pointIdx++
+			targetIdx++
+		}
+	}
+
+	return rowIndices
 }
 
 func findTimeField(frame *data.Frame) (int, *data.Field) {

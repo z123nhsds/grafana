@@ -52,6 +52,24 @@ func TestAlignFrames_EmptyFrame(t *testing.T) {
 	assert.Nil(t, AlignFrames([]*data.Frame{emptyFrame}, time.Second))
 }
 
+func TestAlignFrames_IgnoresEmptyFramesWhenTimelineExists(t *testing.T) {
+	emptyFrame := data.NewFrame("empty",
+		data.NewField("time", nil, []time.Time{}),
+		data.NewField("value", nil, []float64{}),
+	)
+	frame := data.NewFrame("frame",
+		data.NewField("time", nil, []time.Time{time.UnixMilli(1000).UTC()}),
+		data.NewField("value", nil, []float64{1}),
+	)
+
+	alignedFrames := AlignFrames([]*data.Frame{emptyFrame, frame}, time.Second)
+	require.Len(t, alignedFrames, 2)
+	assertAlignedTimeline(t, alignedFrames[0], []int64{1000})
+	assertAlignedValues(t, alignedFrames[0].Fields[1], []float64{0})
+	assertAlignedTimeline(t, alignedFrames[1], []int64{1000})
+	assertAlignedValues(t, alignedFrames[1].Fields[1], []float64{1})
+}
+
 func TestAlignFrames_SkipsFramesWithoutTimeFields(t *testing.T) {
 	frame := data.NewFrame("frame-without-time", data.NewField("value", nil, []float64{1}))
 	assert.Nil(t, AlignFrames([]*data.Frame{frame}, time.Second))
@@ -96,6 +114,22 @@ func TestAlignFrames_VariableStep(t *testing.T) {
 	assertAlignedValues(t, alignedAtOneSecond[0].Fields[1], []float64{1.2, 1.7})
 }
 
+func TestAlignFrames_PreservesHalfStepMatching(t *testing.T) {
+	frame := data.NewFrame("frame",
+		data.NewField("time", nil, []time.Time{
+			time.UnixMilli(1499).UTC(),
+			time.UnixMilli(1500).UTC(),
+			time.UnixMilli(2501).UTC(),
+		}),
+		data.NewField("value", nil, []float64{1.499, 1.5, 2.501}),
+	)
+
+	alignedFrames := AlignFrames([]*data.Frame{frame}, time.Second)
+	require.Len(t, alignedFrames, 1)
+	assertAlignedTimeline(t, alignedFrames[0], []int64{1000, 2000, 3000})
+	assertAlignedValues(t, alignedFrames[0].Fields[1], []float64{1.499, 1.5, 2.501})
+}
+
 func TestAlignTimestamp(t *testing.T) {
 	step := time.Second
 
@@ -131,6 +165,20 @@ func TestAlignTimestamp(t *testing.T) {
 			assert.True(t, tc.expected.Equal(alignTimestamp(tc.input, step)))
 		})
 	}
+}
+
+func TestAlignFrameRowIndices_UsesFirstPointForSameAlignedTimestamp(t *testing.T) {
+	timeField := data.NewField("time", nil, []time.Time{
+		time.UnixMilli(1700).UTC(),
+		time.UnixMilli(2200).UTC(),
+		time.UnixMilli(3200).UTC(),
+	})
+	targetTimestamps := []time.Time{
+		time.UnixMilli(2000).UTC(),
+		time.UnixMilli(3000).UTC(),
+	}
+
+	assert.Equal(t, []int{0, 2}, alignFrameRowIndices(timeField, targetTimestamps, time.Second))
 }
 
 func assertAlignedTimeline(t *testing.T, frame *data.Frame, expected []int64) {
